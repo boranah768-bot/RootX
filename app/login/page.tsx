@@ -229,4 +229,4 @@ export default function LoginPage() {
       `}</style>
     </main>
   );
-}00
+}
