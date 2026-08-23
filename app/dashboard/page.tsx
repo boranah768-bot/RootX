@@ -35,8 +35,12 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [section, setSection] = useState<Section>("recent");
 
+  const [listening, setListening] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   /* LOAD CHATS */
 
@@ -73,6 +77,20 @@ export default function Dashboard() {
       console.error("Failed to save chats:", error);
     }
   }, [chats]);
+
+  /* CLEANUP VOICE */
+
+  useEffect(() => {
+    return () => {
+      try {
+        recognitionRef.current?.stop();
+      } catch {}
+
+      if (typeof window !== "undefined") {
+        window.speechSynthesis?.cancel();
+      }
+    };
+  }, []);
 
   /* AUTO SCROLL */
 
@@ -125,6 +143,8 @@ export default function Dashboard() {
   /* NEW CHAT */
 
   const newChat = () => {
+    stopSpeaking();
+
     setActiveChatId(null);
     setMessage("");
     setSearch("");
@@ -167,12 +187,161 @@ export default function Dashboard() {
     return id;
   };
 
+  /* STOP VOICE OUTPUT */
+
+  const stopSpeaking = () => {
+    if (typeof window === "undefined") return;
+
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+
+    setSpeaking(false);
+  };
+
+  /* ROOTX VOICE OUTPUT */
+
+  const speakResponse = (text: string) => {
+    if (typeof window === "undefined") return;
+
+    if (!("speechSynthesis" in window)) {
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    const cleanText = text
+      .replace(/```[\s\S]*?```/g, "Code omitted.")
+      .replace(/[*_#`]/g, "")
+      .trim();
+
+    if (!cleanText) return;
+
+    const utterance =
+      new SpeechSynthesisUtterance(cleanText);
+
+    utterance.lang = "en-IN";
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+
+    utterance.onstart = () => {
+      setSpeaking(true);
+    };
+
+    utterance.onend = () => {
+      setSpeaking(false);
+    };
+
+    utterance.onerror = () => {
+      setSpeaking(false);
+    };
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  /* VOICE INPUT */
+
+  const startVoiceInput = () => {
+    if (typeof window === "undefined") return;
+
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert(
+        "Voice input is not supported in this browser. Please use Google Chrome or Microsoft Edge."
+      );
+      return;
+    }
+
+    if (listening) {
+      try {
+        recognitionRef.current?.stop();
+      } catch {}
+
+      setListening(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+
+      recognition.lang = "en-IN";
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setListening(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        let transcript = "";
+
+        for (
+          let i = event.resultIndex;
+          i < event.results.length;
+          i++
+        ) {
+          transcript +=
+            event.results[i][0].transcript;
+        }
+
+        setMessage(transcript.trim());
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error(
+          "Voice recognition error:",
+          event.error
+        );
+
+        setListening(false);
+
+        if (event.error === "not-allowed") {
+          alert(
+            "Microphone permission was denied. Please allow microphone access for RootX."
+          );
+        }
+      };
+
+      recognition.onend = () => {
+        setListening(false);
+
+        setTimeout(() => {
+          inputRef.current?.focus();
+        }, 100);
+      };
+
+      recognitionRef.current = recognition;
+
+      recognition.start();
+    } catch (error) {
+      console.error(
+        "Could not start voice recognition:",
+        error
+      );
+
+      setListening(false);
+    }
+  };
+
   /* SEND MESSAGE */
 
   const sendMessage = async () => {
     const text = message.trim();
 
     if (!text || loading) return;
+
+    if (listening) {
+      try {
+        recognitionRef.current?.stop();
+      } catch {}
+
+      setListening(false);
+    }
 
     const chatId = getChatId(text);
 
@@ -226,7 +395,9 @@ export default function Dashboard() {
         data?.content;
 
       if (!reply) {
-        throw new Error("The API returned an empty response.");
+        throw new Error(
+          "The API returned an empty response."
+        );
       }
 
       const rootxMessage: Message = {
@@ -241,11 +412,18 @@ export default function Dashboard() {
 
           return {
             ...chat,
-            messages: [...chat.messages, rootxMessage],
+            messages: [
+              ...chat.messages,
+              rootxMessage,
+            ],
             updatedAt: Date.now(),
           };
         })
       );
+
+      /* SPEAK ROOTX RESPONSE */
+
+      speakResponse(String(reply));
     } catch (error) {
       console.error("RootX API error:", error);
 
@@ -268,7 +446,10 @@ export default function Dashboard() {
 
           return {
             ...chat,
-            messages: [...chat.messages, errorMessage],
+            messages: [
+              ...chat.messages,
+              errorMessage,
+            ],
             updatedAt: Date.now(),
           };
         })
@@ -287,7 +468,10 @@ export default function Dashboard() {
   const handleKeyDown = (
     event: React.KeyboardEvent<HTMLTextAreaElement>
   ) => {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey
+    ) {
       event.preventDefault();
       void sendMessage();
     }
@@ -296,6 +480,8 @@ export default function Dashboard() {
   /* OPEN CHAT */
 
   const openChat = (id: string) => {
+    stopSpeaking();
+
     setActiveChatId(id);
     setMessage("");
     setSidebarOpen(false);
@@ -335,7 +521,9 @@ export default function Dashboard() {
       );
 
       setActiveChatId(
-        sorted.length > 0 ? sorted[0].id : null
+        sorted.length > 0
+          ? sorted[0].id
+          : null
       );
     }
   };
@@ -343,6 +531,8 @@ export default function Dashboard() {
   /* LOGOUT */
 
   const logout = async () => {
+    stopSpeaking();
+
     try {
       await signOut(auth);
       router.push("/login");
@@ -353,6 +543,7 @@ export default function Dashboard() {
 
   return (
     <main className="rootx">
+
       {/* MOBILE OVERLAY */}
 
       {sidebarOpen && (
@@ -367,25 +558,43 @@ export default function Dashboard() {
       <button
         className="logoButton"
         type="button"
-        onClick={() => setSidebarOpen((v) => !v)}
+        onClick={() =>
+          setSidebarOpen((v) => !v)
+        }
       >
-        <img src="/logo.png" alt="RootX" />
+        <img
+          src="/logo.png"
+          alt="RootX"
+        />
       </button>
 
       {/* SIDEBAR */}
 
       <aside
         className={`sidebar ${
-          sidebarOpen ? "sidebarOpen" : ""
+          sidebarOpen
+            ? "sidebarOpen"
+            : ""
         }`}
       >
+
         <div className="brand">
-          <img src="/logo.png" alt="RootX" />
+
+          <img
+            src="/logo.png"
+            alt="RootX"
+          />
 
           <div>
-            <div className="brandName">ROOTX</div>
-            <div className="brandSub">AI WORKSPACE</div>
+            <div className="brandName">
+              ROOTX
+            </div>
+
+            <div className="brandSub">
+              AI WORKSPACE
+            </div>
           </div>
+
         </div>
 
         <button
@@ -407,10 +616,17 @@ export default function Dashboard() {
         />
 
         <div className="menu">
+
           <button
             type="button"
-            className={search ? "menuActive" : ""}
-            onClick={() => setSection("recent")}
+            className={
+              search
+                ? "menuActive"
+                : ""
+            }
+            onClick={() =>
+              setSection("recent")
+            }
           >
             ⌕ Search Chats
           </button>
@@ -459,10 +675,13 @@ export default function Dashboard() {
           >
             ▣ Library
           </button>
+
         </div>
 
         <div className="history">
+
           <div className="historyTitle">
+
             {search
               ? "SEARCH RESULTS"
               : section === "pinned"
@@ -470,29 +689,46 @@ export default function Dashboard() {
               : section === "library"
               ? "LIBRARY"
               : "RECENT CHATS"}
+
           </div>
 
           {filteredChats.length === 0 ? (
+
             <div className="emptyHistory">
               {search
                 ? "No chats found."
                 : "No saved chats yet."}
             </div>
+
           ) : (
+
             filteredChats.map((chat) => (
+
               <ChatItem
                 key={chat.id}
                 chat={chat}
-                active={chat.id === activeChatId}
-                onOpen={() => openChat(chat.id)}
-                onPin={() => togglePin(chat.id)}
-                onDelete={() => deleteChat(chat.id)}
+                active={
+                  chat.id === activeChatId
+                }
+                onOpen={() =>
+                  openChat(chat.id)
+                }
+                onPin={() =>
+                  togglePin(chat.id)
+                }
+                onDelete={() =>
+                  deleteChat(chat.id)
+                }
               />
+
             ))
+
           )}
+
         </div>
 
         <div className="account">
+
           <div className="accountName">
             RootX User
           </div>
@@ -508,75 +744,155 @@ export default function Dashboard() {
           >
             Logout
           </button>
+
         </div>
+
       </aside>
 
       {/* MAIN AREA */}
 
       <section className="content">
+
         <div className="messages">
+
           {messages.length === 0 ? (
+
             <Welcome />
+
           ) : (
+
             <>
               {messages.map((msg) => (
+
                 <MessageBubble
                   key={msg.id}
                   message={msg}
                 />
+
               ))}
 
               {loading && <Typing />}
 
               <div ref={bottomRef} />
+
             </>
+
           )}
+
         </div>
 
         {/* INPUT */}
 
         <div className="inputArea">
+
           <div className="inputBox">
+
             <textarea
               ref={inputRef}
               value={message}
               disabled={loading}
               rows={1}
-              placeholder="Message RootX..."
+              placeholder={
+                listening
+                  ? "Listening..."
+                  : "Message RootX..."
+              }
               onChange={(e) => {
-                setMessage(e.target.value);
+
+                setMessage(
+                  e.target.value
+                );
 
                 e.currentTarget.style.height =
                   "auto";
 
                 e.currentTarget.style.height =
                   `${Math.min(
-                    e.currentTarget.scrollHeight,
+                    e.currentTarget
+                      .scrollHeight,
                     160
                   )}px`;
               }}
               onKeyDown={handleKeyDown}
             />
 
+            {/* MICROPHONE */}
+
+            <button
+              type="button"
+              className={`voiceButton ${
+                listening
+                  ? "voiceActive"
+                  : ""
+              }`}
+              onClick={startVoiceInput}
+              disabled={loading}
+              title={
+                listening
+                  ? "Stop listening"
+                  : "Speak to RootX"
+              }
+            >
+              {listening
+                ? "⏹"
+                : "🎤"}
+            </button>
+
+            {/* SEND */}
+
             <button
               type="button"
               disabled={
-                loading || !message.trim()
+                loading ||
+                !message.trim()
               }
-              onClick={() => void sendMessage()}
+              onClick={() =>
+                void sendMessage()
+              }
             >
-              {loading ? "..." : "Send"}
+              {loading
+                ? "..."
+                : "Send"}
             </button>
+
           </div>
 
           <div className="disclaimer">
-            RootX can make mistakes. Enter to send ·
-            Shift + Enter for a new line.
+
+            {speaking ? (
+
+              <button
+                type="button"
+                className="stopVoice"
+                onClick={stopSpeaking}
+              >
+                🔊 RootX is speaking · Stop
+              </button>
+
+            ) : listening ? (
+
+              <span className="listeningText">
+                🎤 Listening... Speak now
+              </span>
+
+            ) : (
+
+              <>
+                🎤 Speak to RootX · ⌨️ Enter
+                to send · Shift + Enter
+                for a new line
+              </>
+
+            )}
+
           </div>
+
         </div>
+
       </section>
 
       <style jsx>{`
+
         * {
           box-sizing: border-box;
         }
@@ -587,14 +903,22 @@ export default function Dashboard() {
           background: #090909;
           color: #fff;
           font-family:
-            Inter, Arial, Helvetica, sans-serif;
+            Inter,
+            Arial,
+            Helvetica,
+            sans-serif;
           overflow: hidden;
         }
 
         .overlay {
           position: fixed;
           inset: 0;
-          background: rgba(0, 0, 0, 0.65);
+          background: rgba(
+            0,
+            0,
+            0,
+            0.65
+          );
           z-index: 40;
         }
 
@@ -629,7 +953,8 @@ export default function Dashboard() {
           border-right: 1px solid #252525;
           display: flex;
           flex-direction: column;
-          transition: left 0.25s ease;
+          transition:
+            left 0.25s ease;
           z-index: 90;
         }
 
@@ -889,14 +1214,51 @@ export default function Dashboard() {
           cursor: not-allowed;
         }
 
+        .voiceButton {
+          width: 48px !important;
+          height: 48px !important;
+          padding: 0 !important;
+          border: 1px solid #333 !important;
+          border-radius: 12px !important;
+          background: #1b1b1b !important;
+          color: #fff !important;
+          cursor: pointer;
+          flex-shrink: 0;
+          font-size: 18px;
+        }
+
+        .voiceButton:hover {
+          background: #252525 !important;
+        }
+
+        .voiceActive {
+          background: #8cff00 !important;
+          color: #000 !important;
+          border-color: #8cff00 !important;
+        }
+
         .disclaimer {
           color: #555;
           text-align: center;
           font-size: 11px;
           margin-top: 8px;
+          min-height: 16px;
+        }
+
+        .stopVoice {
+          background: transparent;
+          border: 0;
+          color: #8cff00;
+          cursor: pointer;
+          font-size: 11px;
+        }
+
+        .listeningText {
+          color: #8cff00;
         }
 
         @media (max-width: 600px) {
+
           .sidebar {
             width: 285px;
           }
@@ -910,11 +1272,27 @@ export default function Dashboard() {
             max-width: 92%;
           }
 
+          .inputBox {
+            gap: 6px;
+          }
+
+          .inputBox textarea {
+            font-size: 14px;
+          }
+
           .inputBox button {
             padding: 0 15px;
           }
+
+          .voiceButton {
+            width: 46px !important;
+            min-width: 46px;
+          }
+
         }
+
       `}</style>
+
     </main>
   );
 }
@@ -934,6 +1312,7 @@ function Welcome() {
         padding: "40px 10px",
       }}
     >
+
       <img
         src="/logo.png"
         alt="RootX"
@@ -949,7 +1328,8 @@ function Welcome() {
       <h1
         style={{
           margin: "0 0 12px",
-          fontSize: "clamp(30px, 5vw, 48px)",
+          fontSize:
+            "clamp(30px, 5vw, 48px)",
         }}
       >
         Welcome to RootX
@@ -962,8 +1342,10 @@ function Welcome() {
           fontSize: 14,
         }}
       >
-        Your AI assistant for coding, security and research.
+        Your AI assistant for coding,
+        security and research.
       </p>
+
     </div>
   );
 }
@@ -975,7 +1357,8 @@ function MessageBubble({
 }: {
   message: Message;
 }) {
-  const user = message.role === "user";
+  const user =
+    message.role === "user";
 
   return (
     <div
@@ -988,13 +1371,20 @@ function MessageBubble({
         width: "100%",
       }}
     >
+
       <div
         style={{
-          maxWidth: user ? "75%" : "100%",
-          width: user ? "auto" : "100%",
+          maxWidth: user
+            ? "75%"
+            : "100%",
+          width: user
+            ? "auto"
+            : "100%",
         }}
       >
+
         {!user && (
+
           <div
             style={{
               display: "flex",
@@ -1003,6 +1393,7 @@ function MessageBubble({
               marginBottom: 8,
             }}
           >
+
             <img
               src="/logo.png"
               alt="RootX"
@@ -1014,26 +1405,45 @@ function MessageBubble({
               }}
             />
 
-            <strong style={{ fontSize: 13 }}>
+            <strong
+              style={{
+                fontSize: 13,
+              }}
+            >
               RootX
             </strong>
+
           </div>
+
         )}
 
         <div
           style={{
-            background: user ? "#fff" : "transparent",
-            color: user ? "#000" : "#e7e7e7",
-            borderRadius: user ? 18 : 8,
-            padding: user ? "12px 16px" : 0,
+            background: user
+              ? "#fff"
+              : "transparent",
+            color: user
+              ? "#000"
+              : "#e7e7e7",
+            borderRadius: user
+              ? 18
+              : 8,
+            padding: user
+              ? "12px 16px"
+              : 0,
             lineHeight: 1.7,
             fontSize: 15,
-            wordBreak: "break-word",
+            wordBreak:
+              "break-word",
           }}
         >
-          <FormattedText text={message.text} />
+          <FormattedText
+            text={message.text}
+          />
         </div>
+
       </div>
+
     </div>
   );
 }
@@ -1045,98 +1455,130 @@ function FormattedText({
 }: {
   text: string;
 }) {
-  const parts = text.split(/(```[\s\S]*?```)/g);
+  const parts = text.split(
+    /(```[\s\S]*?```)/g
+  );
 
   return (
     <div>
-      {parts.map((part, index) => {
-        if (part.startsWith("```")) {
-          const content = part.slice(3, -3);
-          const lines = content.split("\n");
 
-          let language = "";
-          let code = content;
+      {parts.map(
+        (part, index) => {
 
           if (
-            lines.length > 0 &&
-            /^[a-zA-Z0-9_+#.-]+$/.test(
-              lines[0].trim()
-            )
+            part.startsWith("```")
           ) {
-            language = lines[0].trim();
-            code = lines.slice(1).join("\n");
+
+            const content =
+              part.slice(3, -3);
+
+            const lines =
+              content.split("\n");
+
+            let language = "";
+            let code = content;
+
+            if (
+              lines.length > 0 &&
+              /^[a-zA-Z0-9_+#.-]+$/.test(
+                lines[0].trim()
+              )
+            ) {
+              language =
+                lines[0].trim();
+
+              code =
+                lines
+                  .slice(1)
+                  .join("\n");
+            }
+
+            return (
+              <CodeBlock
+                key={index}
+                code={code}
+                language={language}
+              />
+            );
           }
 
           return (
-            <CodeBlock
+            <div
               key={index}
-              code={code}
-              language={language}
-            />
+              style={{
+                whiteSpace:
+                  "pre-wrap",
+                marginBottom:
+                  index <
+                  parts.length - 1
+                    ? 12
+                    : 0,
+              }}
+            >
+              {formatInline(part)}
+            </div>
           );
         }
+      )}
 
-        return (
-          <div
-            key={index}
-            style={{
-              whiteSpace: "pre-wrap",
-              marginBottom:
-                index < parts.length - 1
-                  ? 12
-                  : 0,
-            }}
-          >
-            {formatInline(part)}
-          </div>
-        );
-      })}
     </div>
   );
 }
 
 /* INLINE FORMAT */
 
-function formatInline(text: string) {
-  const parts = text.split(
-    /(`[^`]+`|\*\*[^*]+\*\*)/g
+function formatInline(
+  text: string
+) {
+  const parts =
+    text.split(
+      /(`[^`]+`|\*\*[^*]+\*\*)/g
+    );
+
+  return parts.map(
+    (part, index) => {
+
+      if (
+        part.startsWith("`") &&
+        part.endsWith("`")
+      ) {
+        return (
+          <code
+            key={index}
+            style={{
+              padding: "2px 5px",
+              borderRadius: 5,
+              background: "#222",
+              border:
+                "1px solid #333",
+              fontFamily:
+                "monospace",
+              fontSize: "0.9em",
+            }}
+          >
+            {part.slice(1, -1)}
+          </code>
+        );
+      }
+
+      if (
+        part.startsWith("**") &&
+        part.endsWith("**")
+      ) {
+        return (
+          <strong key={index}>
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+
+      return (
+        <span key={index}>
+          {part}
+        </span>
+      );
+    }
   );
-
-  return parts.map((part, index) => {
-    if (
-      part.startsWith("`") &&
-      part.endsWith("`")
-    ) {
-      return (
-        <code
-          key={index}
-          style={{
-            padding: "2px 5px",
-            borderRadius: 5,
-            background: "#222",
-            border: "1px solid #333",
-            fontFamily: "monospace",
-            fontSize: "0.9em",
-          }}
-        >
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-
-    if (
-      part.startsWith("**") &&
-      part.endsWith("**")
-    ) {
-      return (
-        <strong key={index}>
-          {part.slice(2, -2)}
-        </strong>
-      );
-    }
-
-    return <span key={index}>{part}</span>;
-  });
 }
 
 /* CODE BLOCK */
@@ -1148,18 +1590,26 @@ function CodeBlock({
   code: string;
   language: string;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] =
+    useState(false);
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(
+        code
+      );
+
       setCopied(true);
 
       setTimeout(() => {
         setCopied(false);
       }, 1500);
+
     } catch (error) {
-      console.error("Copy failed:", error);
+      console.error(
+        "Copy failed:",
+        error
+      );
     }
   };
 
@@ -1167,27 +1617,33 @@ function CodeBlock({
     <div
       style={{
         margin: "12px 0",
-        border: "1px solid #292929",
+        border:
+          "1px solid #292929",
         borderRadius: 12,
         overflow: "hidden",
         background: "#0d0d0d",
       }}
     >
+
       <div
         style={{
           display: "flex",
-          justifyContent: "space-between",
+          justifyContent:
+            "space-between",
           alignItems: "center",
           padding: "8px 12px",
           background: "#171717",
-          borderBottom: "1px solid #292929",
+          borderBottom:
+            "1px solid #292929",
         }}
       >
+
         <span
           style={{
             color: "#777",
             fontSize: 11,
-            textTransform: "uppercase",
+            textTransform:
+              "uppercase",
           }}
         >
           {language || "code"}
@@ -1195,19 +1651,26 @@ function CodeBlock({
 
         <button
           type="button"
-          onClick={() => void copy()}
+          onClick={() =>
+            void copy()
+          }
           style={{
             padding: "5px 9px",
-            background: "transparent",
+            background:
+              "transparent",
             color: "#aaa",
-            border: "1px solid #333",
+            border:
+              "1px solid #333",
             borderRadius: 7,
             cursor: "pointer",
             fontSize: 11,
           }}
         >
-          {copied ? "Copied!" : "Copy"}
+          {copied
+            ? "Copied!"
+            : "Copy"}
         </button>
+
       </div>
 
       <pre
@@ -1218,11 +1681,13 @@ function CodeBlock({
           color: "#e8e8e8",
           fontSize: 13,
           lineHeight: 1.6,
-          fontFamily: "monospace",
+          fontFamily:
+            "monospace",
         }}
       >
         <code>{code}</code>
       </pre>
+
     </div>
   );
 }
@@ -1241,6 +1706,7 @@ function Typing() {
         fontSize: 13,
       }}
     >
+
       <img
         src="/logo.png"
         alt="RootX"
@@ -1253,6 +1719,7 @@ function Typing() {
       />
 
       RootX is thinking...
+
     </div>
   );
 }
@@ -1275,25 +1742,35 @@ function ChatItem({
   return (
     <div
       className={`chatItem ${
-        active ? "chatItemActive" : ""
+        active
+          ? "chatItemActive"
+          : ""
       }`}
     >
+
       <button
         type="button"
         className="chatOpen"
         onClick={onOpen}
         title={chat.title}
       >
-        {chat.title || "New Chat"}
+        {chat.title ||
+          "New Chat"}
       </button>
 
       <button
         type="button"
         className={`chatAction ${
-          chat.pinned ? "pinned" : ""
+          chat.pinned
+            ? "pinned"
+            : ""
         }`}
         onClick={onPin}
-        title={chat.pinned ? "Unpin" : "Pin"}
+        title={
+          chat.pinned
+            ? "Unpin"
+            : "Pin"
+        }
       >
         ★
       </button>
@@ -1306,6 +1783,7 @@ function ChatItem({
       >
         ×
       </button>
+
     </div>
   );
 }
