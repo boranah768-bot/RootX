@@ -11,31 +11,98 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
+    if (loading) return;
 
-      alert("Welcome back to RootX!");
-      router.push("/dashboard");
-    } catch (error: any) {
-      alert(error.message);
+    setError("");
+
+    const cleanEmail = email.trim();
+
+    if (!cleanEmail) {
+      setError("Please enter your email.");
+      return;
+    }
+
+    if (!password) {
+      setError("Please enter your password.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      await signInWithEmailAndPassword(
+        auth,
+        cleanEmail,
+        password
+      );
+
+      router.replace("/dashboard");
+    } catch (error: unknown) {
+      console.error("Login error:", error);
+
+      let message = "Unable to sign in. Please try again.";
+
+      if (error instanceof Error) {
+        const firebaseError = error as Error & { code?: string };
+
+        switch (firebaseError.code) {
+          case "auth/invalid-credential":
+            message = "Incorrect email or password.";
+            break;
+
+          case "auth/user-not-found":
+            message = "No RootX account was found with this email.";
+            break;
+
+          case "auth/wrong-password":
+            message = "Incorrect password.";
+            break;
+
+          case "auth/invalid-email":
+            message = "Please enter a valid email address.";
+            break;
+
+          case "auth/user-disabled":
+            message = "This RootX account has been disabled.";
+            break;
+
+          case "auth/network-request-failed":
+            message = "Network error. Please check your internet connection.";
+            break;
+
+          default:
+            message = firebaseError.message || message;
+        }
+      }
+
+      setError(message);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <main className="page">
-      {/* Circular Text */}
-      <svg className="circleText" viewBox="0 0 800 800">
+      <svg
+        className="circleText"
+        viewBox="0 0 800 800"
+        aria-hidden="true"
+      >
         <defs>
           <path
             id="circlePath"
             d="
-            M 400 400
-            m -310 0
-            a 310 310 0 1 1 620 0
-            a 310 310 0 1 1 -620 0
+              M 400 400
+              m -310 0
+              a 310 310 0 1 1 620 0
+              a 310 310 0 1 1 -620 0
             "
           />
         </defs>
@@ -56,17 +123,20 @@ export default function LoginPage() {
           letterSpacing="8"
         >
           <textPath href="#circlePath">
-            AI • CODE • SECURITY • INTELLIGENCE • ROOTX • FUTURE • CYBER • BUILD • CREATE • SECURE •
+            AI • CODE • SECURITY • INTELLIGENCE • ROOTX • FUTURE • CYBER •
+            BUILD • CREATE • SECURE •
           </textPath>
         </text>
       </svg>
 
-      {/* Glow */}
-      <div className="glow"></div>
+      <div className="glow" />
 
-      {/* Login Card */}
       <form className="card" onSubmit={handleLogin}>
-        <img src="/logo.png" alt="RootX" className="logo" />
+        <img
+          src="/logo.png"
+          alt="RootX"
+          className="logo"
+        />
 
         <h1>ROOTX</h1>
 
@@ -74,33 +144,75 @@ export default function LoginPage() {
           Sign in to your AI workspace
         </p>
 
-        <label>Email</label>
+        {error && (
+          <div className="errorBox" role="alert">
+            {error}
+          </div>
+        )}
+
+        <label htmlFor="email">
+          Email
+        </label>
 
         <input
+          id="email"
           type="email"
           placeholder="Enter your email"
           value={email}
           required
+          autoComplete="email"
+          disabled={loading}
           onChange={(e) => setEmail(e.target.value)}
         />
 
-        <label>Password</label>
+        <label htmlFor="password">
+          Password
+        </label>
 
-        <input
-          type="password"
-          placeholder="Enter your password"
-          value={password}
-          required
-          onChange={(e) => setPassword(e.target.value)}
-        />
+        <div className="passwordWrapper">
+          <input
+            id="password"
+            type={showPassword ? "text" : "password"}
+            placeholder="Enter your password"
+            value={password}
+            required
+            autoComplete="current-password"
+            disabled={loading}
+            onChange={(e) => setPassword(e.target.value)}
+          />
 
-        <button type="submit">
-          Login
+          <button
+            type="button"
+            className="eyeButton"
+            onClick={() => setShowPassword((previous) => !previous)}
+            disabled={loading}
+            aria-label={
+              showPassword
+                ? "Hide password"
+                : "Show password"
+            }
+          >
+            {showPassword ? "◉" : "◌"}
+          </button>
+        </div>
+
+        <button
+          type="submit"
+          className="loginButton"
+          disabled={loading}
+        >
+          {loading ? "Signing in..." : "Login"}
         </button>
 
         <p className="login">
           Don't have an account?{" "}
-          <span onClick={() => router.push("/signup")}>
+          <span
+            onClick={() => {
+              if (!loading) {
+                router.push("/signup");
+              }
+            }}
+          >
             Create Account
           </span>
         </p>
@@ -108,7 +220,7 @@ export default function LoginPage() {
 
       <style jsx>{`
         .page {
-          height: 100vh;
+          min-height: 100vh;
           width: 100%;
           background: #ffffff;
           display: flex;
@@ -118,7 +230,9 @@ export default function LoginPage() {
           position: fixed;
           inset: 0;
           color: black;
-          font-family: Inter, Arial;
+          font-family: Inter, Arial, sans-serif;
+          padding: 20px;
+          box-sizing: border-box;
         }
 
         .circleText {
@@ -126,6 +240,7 @@ export default function LoginPage() {
           width: 720px;
           height: 720px;
           animation: rotate 45s linear infinite;
+          pointer-events: none;
         }
 
         .glow {
@@ -136,17 +251,22 @@ export default function LoginPage() {
           filter: blur(140px);
           opacity: 0.15;
           z-index: 0;
+          pointer-events: none;
         }
 
         .card {
           width: 390px;
+          max-width: 100%;
+          max-height: calc(100vh - 40px);
+          overflow-y: auto;
           padding: 40px;
-          background: rgba(255, 255, 255, 0.95);
+          background: rgba(255, 255, 255, 0.96);
           border: 1px solid #e5e5e5;
           border-radius: 24px;
           backdrop-filter: blur(20px);
           z-index: 2;
           box-shadow: 0 30px 100px rgba(0, 0, 0, 0.12);
+          box-sizing: border-box;
         }
 
         .logo {
@@ -155,6 +275,7 @@ export default function LoginPage() {
           border-radius: 20px;
           display: block;
           margin: auto;
+          object-fit: cover;
         }
 
         h1 {
@@ -168,20 +289,32 @@ export default function LoginPage() {
         .subtitle {
           text-align: center;
           color: #666;
-          margin-bottom: 35px;
+          margin: 0 0 30px;
+        }
+
+        .errorBox {
+          background: #fff0f0;
+          border: 1px solid #ffcaca;
+          color: #c62828;
+          padding: 12px;
+          border-radius: 10px;
+          font-size: 13px;
+          line-height: 1.5;
+          margin-bottom: 20px;
         }
 
         label {
+          display: block;
           color: #444;
           font-size: 14px;
+          margin-bottom: 8px;
         }
 
         input {
           width: 100%;
           box-sizing: border-box;
           padding: 15px;
-          margin-top: 8px;
-          margin-bottom: 22px;
+          margin-bottom: 20px;
           background: white;
           border: 1px solid #d9d9d9;
           border-radius: 12px;
@@ -190,11 +323,46 @@ export default function LoginPage() {
           outline: none;
         }
 
+        input:focus {
+          border-color: #888;
+        }
+
+        input:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
         input::placeholder {
           color: #999;
         }
 
-        button {
+        .passwordWrapper {
+          position: relative;
+        }
+
+        .passwordWrapper input {
+          padding-right: 52px;
+        }
+
+        .eyeButton {
+          position: absolute;
+          right: 8px;
+          top: 5px;
+          width: 40px;
+          height: 40px;
+          padding: 0;
+          background: transparent;
+          color: #666;
+          border: none;
+          cursor: pointer;
+          font-size: 20px;
+        }
+
+        .eyeButton:hover {
+          color: black;
+        }
+
+        .loginButton {
           width: 100%;
           padding: 15px;
           background: black;
@@ -204,12 +372,23 @@ export default function LoginPage() {
           font-weight: 700;
           cursor: pointer;
           font-size: 15px;
+          transition: opacity 0.2s ease;
+        }
+
+        .loginButton:hover:not(:disabled) {
+          opacity: 0.85;
+        }
+
+        .loginButton:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
         }
 
         .login {
           text-align: center;
           color: #666;
           margin-top: 25px;
+          font-size: 14px;
         }
 
         .login span {
@@ -222,8 +401,29 @@ export default function LoginPage() {
           from {
             transform: rotate(0deg);
           }
+
           to {
             transform: rotate(360deg);
+          }
+        }
+
+        @media (max-width: 700px) {
+          .circleText {
+            width: 600px;
+            height: 600px;
+          }
+
+          .card {
+            padding: 28px 22px;
+          }
+
+          .logo {
+            width: 65px;
+            height: 65px;
+          }
+
+          h1 {
+            font-size: 30px;
           }
         }
       `}</style>
