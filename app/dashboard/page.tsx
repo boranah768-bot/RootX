@@ -1,461 +1,1311 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { auth } from "../../lib/firebase";
+
+type Role = "user" | "rootx";
+
+type Message = {
+  id: string;
+  role: Role;
+  text: string;
+};
+
+type Chat = {
+  id: string;
+  title: string;
+  messages: Message[];
+  pinned: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type Section = "recent" | "pinned" | "library";
 
 export default function Dashboard() {
   const router = useRouter();
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [section, setSection] = useState<Section>("recent");
 
-  const [messages, setMessages] = useState<
-    { role: "user" | "rootx"; text: string }[]
-  >([]);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  /* LOAD CHATS */
 
-const sendMessage = async () => {
-  if (!message.trim()) return;
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("rootx_chats");
 
-  const userText = message;
+      if (!saved) return;
 
-  setMessages((prev) => [
-    ...prev,
-    {
-      role: "user",
-      text: userText,
-    },
-  ]);
+      const data = JSON.parse(saved);
 
-  setMessage("");
+      if (Array.isArray(data)) {
+        setChats(data);
 
-  try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: userText,
-      }),
-    });
+        if (data.length > 0) {
+          const sorted = [...data].sort(
+            (a: Chat, b: Chat) => b.updatedAt - a.updatedAt
+          );
 
-    const data = await response.json();
+          setActiveChatId(sorted[0].id);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to load chats:", error);
+    }
+  }, []);
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "rootx",
-        text: data.reply || "No response received.",
-      },
-    ]);
+  /* SAVE CHATS */
 
-  } catch (error) {
+  useEffect(() => {
+    try {
+      localStorage.setItem("rootx_chats", JSON.stringify(chats));
+    } catch (error) {
+      console.error("Failed to save chats:", error);
+    }
+  }, [chats]);
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "rootx",
-        text: "Connection error. Please try again.",
-      },
-    ]);
+  /* AUTO SCROLL */
 
-  }
-};
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      bottomRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "end",
+      });
+    }, 50);
 
+    return () => clearTimeout(timer);
+  }, [chats, activeChatId, loading]);
+
+  /* ACTIVE CHAT */
+
+  const activeChat = chats.find(
+    (chat) => chat.id === activeChatId
+  );
+
+  const messages = activeChat?.messages ?? [];
+
+  /* FILTERED CHATS */
+
+  const filteredChats = useMemo(() => {
+    let result = [...chats];
+
+    if (section === "pinned") {
+      result = result.filter((chat) => chat.pinned);
+    }
+
+    result.sort((a, b) => b.updatedAt - a.updatedAt);
+
+    if (search.trim()) {
+      const q = search.toLowerCase().trim();
+
+      result = result.filter((chat) => {
+        return (
+          chat.title.toLowerCase().includes(q) ||
+          chat.messages.some((msg) =>
+            msg.text.toLowerCase().includes(q)
+          )
+        );
+      });
+    }
+
+    return result;
+  }, [chats, section, search]);
+
+  /* NEW CHAT */
 
   const newChat = () => {
-    setMessages([]);
+    setActiveChatId(null);
+    setMessage("");
+    setSearch("");
+    setSection("recent");
     setSidebarOpen(false);
+
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 100);
   };
 
+  /* CREATE CHAT */
+
+  const getChatId = (text: string) => {
+    if (
+      activeChatId &&
+      chats.some((chat) => chat.id === activeChatId)
+    ) {
+      return activeChatId;
+    }
+
+    const id = crypto.randomUUID();
+    const now = Date.now();
+
+    const chat: Chat = {
+      id,
+      title:
+        text.length > 40
+          ? text.slice(0, 40) + "..."
+          : text,
+      messages: [],
+      pinned: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    setChats((prev) => [chat, ...prev]);
+    setActiveChatId(id);
+
+    return id;
+  };
+
+  /* SEND MESSAGE */
+
+  const sendMessage = async () => {
+    const text = message.trim();
+
+    if (!text || loading) return;
+
+    const chatId = getChatId(text);
+
+    const userMessage: Message = {
+      id: crypto.randomUUID(),
+      role: "user",
+      text,
+    };
+
+    setMessage("");
+
+    setChats((prev) =>
+      prev.map((chat) => {
+        if (chat.id !== chatId) return chat;
+
+        return {
+          ...chat,
+          messages: [...chat.messages, userMessage],
+          updatedAt: Date.now(),
+        };
+      })
+    );
+
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: text,
+        }),
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+            data?.message ||
+            `Request failed: ${response.status}`
+        );
+      }
+
+      const reply =
+        data?.reply ??
+        data?.message ??
+        data?.text ??
+        data?.content;
+
+      if (!reply) {
+        throw new Error("The API returned an empty response.");
+      }
+
+      const rootxMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "rootx",
+        text: String(reply),
+      };
+
+      setChats((prev) =>
+        prev.map((chat) => {
+          if (chat.id !== chatId) return chat;
+
+          return {
+            ...chat,
+            messages: [...chat.messages, rootxMessage],
+            updatedAt: Date.now(),
+          };
+        })
+      );
+    } catch (error) {
+      console.error("RootX API error:", error);
+
+      const errorText =
+        error instanceof Error
+          ? error.message
+          : "Unknown error";
+
+      const errorMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "rootx",
+        text:
+          "I couldn't connect to the AI service.\n\n" +
+          `Error: ${errorText}`,
+      };
+
+      setChats((prev) =>
+        prev.map((chat) => {
+          if (chat.id !== chatId) return chat;
+
+          return {
+            ...chat,
+            messages: [...chat.messages, errorMessage],
+            updatedAt: Date.now(),
+          };
+        })
+      );
+    } finally {
+      setLoading(false);
+
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
+    }
+  };
+
+  /* ENTER */
+
+  const handleKeyDown = (
+    event: React.KeyboardEvent<HTMLTextAreaElement>
+  ) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendMessage();
+    }
+  };
+
+  /* OPEN CHAT */
+
+  const openChat = (id: string) => {
+    setActiveChatId(id);
+    setMessage("");
+    setSidebarOpen(false);
+
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 100);
+  };
+
+  /* PIN */
+
+  const togglePin = (id: string) => {
+    setChats((prev) =>
+      prev.map((chat) =>
+        chat.id === id
+          ? {
+              ...chat,
+              pinned: !chat.pinned,
+            }
+          : chat
+      )
+    );
+  };
+
+  /* DELETE */
+
+  const deleteChat = (id: string) => {
+    const remaining = chats.filter(
+      (chat) => chat.id !== id
+    );
+
+    setChats(remaining);
+
+    if (activeChatId === id) {
+      const sorted = [...remaining].sort(
+        (a, b) => b.updatedAt - a.updatedAt
+      );
+
+      setActiveChatId(
+        sorted.length > 0 ? sorted[0].id : null
+      );
+    }
+  };
+
+  /* LOGOUT */
 
   const logout = async () => {
-    await signOut(auth);
-    router.push("/login");
+    try {
+      await signOut(auth);
+      router.push("/login");
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
   };
 
-
   return (
-    <main
-      style={{
-        height: "100vh",
-        background: "#090909",
-        color: "white",
-        fontFamily: "Inter, Arial",
-        overflow: "hidden",
-      }}
-    >
+    <main className="rootx">
+      {/* MOBILE OVERLAY */}
 
+      {sidebarOpen && (
+        <div
+          className="overlay"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
 
-      {/* RootX Logo Button */}
+      {/* SIDEBAR BUTTON */}
 
       <button
-        onClick={() => setSidebarOpen(!sidebarOpen)}
-        style={{
-          position: "fixed",
-          top: "22px",
-          left: "22px",
-          zIndex: 50,
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-        }}
+        className="logoButton"
+        type="button"
+        onClick={() => setSidebarOpen((v) => !v)}
       >
-        <img
-          src="/logo.png"
-          alt="RootX"
-          style={{
-            width: "42px",
-            height: "42px",
-            borderRadius: "12px",
-          }}
-        />
+        <img src="/logo.png" alt="RootX" />
       </button>
 
-
-
-      {/* Sidebar */}
+      {/* SIDEBAR */}
 
       <aside
-        style={{
-          position: "fixed",
-          top: 0,
-          left: sidebarOpen ? 0 : "-320px",
-          width: "300px",
-          height: "100vh",
-          background: "#111111",
-          padding: "25px",
-          transition: "0.35s ease",
-          zIndex: 40,
-          display: "flex",
-          flexDirection: "column",
-        }}
+        className={`sidebar ${
+          sidebarOpen ? "sidebarOpen" : ""
+        }`}
       >
+        <div className="brand">
+          <img src="/logo.png" alt="RootX" />
 
-
-        <div
-          style={{
-            display:"flex",
-            alignItems:"center",
-            gap:"12px",
-            marginBottom:"35px",
-          }}
-        >
-
-          <img
-            src="/logo.png"
-            alt="RootX"
-            style={{
-              width:"40px",
-              height:"40px",
-              borderRadius:"10px",
-            }}
-          />
-
-          <h2
-            style={{
-              margin:0,
-              letterSpacing:"3px",
-              fontSize:"20px",
-            }}
-          >
-            ROOTX
-          </h2>
-
+          <div>
+            <div className="brandName">ROOTX</div>
+            <div className="brandSub">AI WORKSPACE</div>
+          </div>
         </div>
 
-
-
         <button
+          type="button"
+          className="newChat"
           onClick={newChat}
-          style={{
-            padding:"13px",
-            background:"#ffffff",
-            color:"#000",
-            border:"none",
-            borderRadius:"12px",
-            fontWeight:"700",
-            cursor:"pointer",
-          }}
         >
           + New Chat
         </button>
 
-
-
-        <div style={{marginTop:"30px"}}>
-
-          <MenuItem text="⌕  Search Chats"/>
-          <MenuItem text="★  Pinned Chats"/>
-          <MenuItem text="◷  Recent"/>
-          <MenuItem text="▣  Library"/>
-
-        </div>
-
-
-
-        <p
-          style={{
-            marginTop:"35px",
-            color:"#666",
-            fontSize:"12px",
+        <input
+          className="searchInput"
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setSection("recent");
           }}
-        >
-          CHAT HISTORY
-        </p>
+          placeholder="Search chats..."
+        />
 
-
-        <p
-          style={{
-            color:"#777",
-            fontSize:"14px",
-          }}
-        >
-          No saved chats
-        </p>
-
-
-
-        <div
-          style={{
-            marginTop:"auto",
-            borderTop:"1px solid #222",
-            paddingTop:"20px",
-          }}
-        >
-
-          <p
-            style={{
-              margin:0,
-              fontWeight:"600",
-            }}
+        <div className="menu">
+          <button
+            type="button"
+            className={search ? "menuActive" : ""}
+            onClick={() => setSection("recent")}
           >
-            RootX User
-          </p>
-
-          <small
-            style={{
-              color:"#777",
-            }}
-          >
-            AI Developer
-          </small>
-
+            ⌕ Search Chats
+          </button>
 
           <button
-            onClick={logout}
-            style={{
-              marginTop:"15px",
-              width:"100%",
-              padding:"11px",
-              background:"transparent",
-              color:"#aaa",
-              border:"1px solid #333",
-              borderRadius:"10px",
-              cursor:"pointer",
+            type="button"
+            className={
+              section === "pinned"
+                ? "menuActive"
+                : ""
+            }
+            onClick={() => {
+              setSection("pinned");
+              setSearch("");
             }}
+          >
+            ★ Pinned Chats
+          </button>
+
+          <button
+            type="button"
+            className={
+              section === "recent"
+                ? "menuActive"
+                : ""
+            }
+            onClick={() => {
+              setSection("recent");
+              setSearch("");
+            }}
+          >
+            ◷ Recent
+          </button>
+
+          <button
+            type="button"
+            className={
+              section === "library"
+                ? "menuActive"
+                : ""
+            }
+            onClick={() => {
+              setSection("library");
+              setSearch("");
+            }}
+          >
+            ▣ Library
+          </button>
+        </div>
+
+        <div className="history">
+          <div className="historyTitle">
+            {search
+              ? "SEARCH RESULTS"
+              : section === "pinned"
+              ? "PINNED CHATS"
+              : section === "library"
+              ? "LIBRARY"
+              : "RECENT CHATS"}
+          </div>
+
+          {filteredChats.length === 0 ? (
+            <div className="emptyHistory">
+              {search
+                ? "No chats found."
+                : "No saved chats yet."}
+            </div>
+          ) : (
+            filteredChats.map((chat) => (
+              <ChatItem
+                key={chat.id}
+                chat={chat}
+                active={chat.id === activeChatId}
+                onOpen={() => openChat(chat.id)}
+                onPin={() => togglePin(chat.id)}
+                onDelete={() => deleteChat(chat.id)}
+              />
+            ))
+          )}
+        </div>
+
+        <div className="account">
+          <div className="accountName">
+            RootX User
+          </div>
+
+          <div className="accountRole">
+            AI Developer
+          </div>
+
+          <button
+            type="button"
+            className="logout"
+            onClick={logout}
           >
             Logout
           </button>
-
-
         </div>
-
-
       </aside>
 
+      {/* MAIN AREA */}
 
+      <section className="content">
+        <div className="messages">
+          {messages.length === 0 ? (
+            <Welcome />
+          ) : (
+            <>
+              {messages.map((msg) => (
+                <MessageBubble
+                  key={msg.id}
+                  message={msg}
+                />
+              ))}
 
+              {loading && <Typing />}
 
-      {/* Main Chat */}
-
-      <section
-        style={{
-          height:"100%",
-          display:"flex",
-          flexDirection:"column",
-          alignItems:"center",
-        }}
-      >
-
-
-        {messages.length === 0 ? (
-
-          <div
-            style={{
-              flex:1,
-              display:"flex",
-              justifyContent:"center",
-              alignItems:"center",
-              flexDirection:"column",
-            }}
-          >
-
-            <img
-              src="/logo.png"
-              alt="RootX"
-              style={{
-                width:"100px",
-                height:"100px",
-                borderRadius:"25px",
-              }}
-            />
-
-
-            <h1
-              style={{
-                fontSize:"48px",
-                marginTop:"25px",
-              }}
-            >
-              Welcome to RootX
-            </h1>
-
-
-            <p
-              style={{
-                color:"#888",
-              }}
-            >
-              Your AI assistant for coding, security and research
-            </p>
-
-
-          </div>
-
-
-        ) : (
-
-          <div
-            style={{
-              width:"750px",
-              maxWidth:"90%",
-              flex:1,
-              overflowY:"auto",
-              paddingTop:"80px",
-            }}
-          >
-
-            {messages.map((msg,index)=>(
-
-              <div
-                key={index}
-                style={{
-                  display:"flex",
-                  justifyContent:
-                  msg.role==="user"
-                  ? "flex-end"
-                  : "flex-start",
-                  marginBottom:"18px",
-                }}
-              >
-
-                <div
-                  style={{
-                    maxWidth:"70%",
-                    padding:"14px 18px",
-                    borderRadius:"18px",
-                    background:
-                    msg.role==="user"
-                    ? "#ffffff"
-                    : "#171717",
-                    color:
-                    msg.role==="user"
-                    ? "#000"
-                    : "#fff",
-                  }}
-                >
-                  {msg.text}
-                </div>
-
-
-              </div>
-
-            ))}
-
-
-          </div>
-
-        )}
-
-
-
-
-        {/* Message Box */}
-
-        <div
-          style={{
-            width:"750px",
-            maxWidth:"90%",
-            padding:"20px",
-            display:"flex",
-            gap:"12px",
-          }}
-        >
-
-          <input
-            value={message}
-            onChange={(e)=>setMessage(e.target.value)}
-            onKeyDown={(e)=>{
-              if(e.key==="Enter") sendMessage();
-            }}
-            placeholder="Message RootX..."
-            style={{
-              flex:1,
-              padding:"16px",
-              background:"#151515",
-              color:"white",
-              border:"1px solid #333",
-              borderRadius:"16px",
-              outline:"none",
-            }}
-          />
-
-
-          <button
-            onClick={sendMessage}
-            style={{
-              padding:"0 28px",
-              background:"#ffffff",
-              color:"#000",
-              border:"none",
-              borderRadius:"16px",
-              fontWeight:"700",
-              cursor:"pointer",
-            }}
-          >
-            Send
-          </button>
-
-
+              <div ref={bottomRef} />
+            </>
+          )}
         </div>
 
+        {/* INPUT */}
 
+        <div className="inputArea">
+          <div className="inputBox">
+            <textarea
+              ref={inputRef}
+              value={message}
+              disabled={loading}
+              rows={1}
+              placeholder="Message RootX..."
+              onChange={(e) => {
+                setMessage(e.target.value);
+
+                e.currentTarget.style.height =
+                  "auto";
+
+                e.currentTarget.style.height =
+                  `${Math.min(
+                    e.currentTarget.scrollHeight,
+                    160
+                  )}px`;
+              }}
+              onKeyDown={handleKeyDown}
+            />
+
+            <button
+              type="button"
+              disabled={
+                loading || !message.trim()
+              }
+              onClick={() => void sendMessage()}
+            >
+              {loading ? "..." : "Send"}
+            </button>
+          </div>
+
+          <div className="disclaimer">
+            RootX can make mistakes. Enter to send ·
+            Shift + Enter for a new line.
+          </div>
+        </div>
       </section>
 
+      <style jsx>{`
+        * {
+          box-sizing: border-box;
+        }
 
+        .rootx {
+          width: 100%;
+          height: 100vh;
+          background: #090909;
+          color: #fff;
+          font-family:
+            Inter, Arial, Helvetica, sans-serif;
+          overflow: hidden;
+        }
+
+        .overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.65);
+          z-index: 40;
+        }
+
+        .logoButton {
+          position: fixed;
+          top: 18px;
+          left: 18px;
+          width: 48px;
+          height: 48px;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          cursor: pointer;
+          z-index: 100;
+        }
+
+        .logoButton img {
+          width: 48px;
+          height: 48px;
+          object-fit: cover;
+          border-radius: 14px;
+        }
+
+        .sidebar {
+          position: fixed;
+          top: 0;
+          left: -320px;
+          width: 300px;
+          height: 100vh;
+          padding: 24px;
+          background: #111;
+          border-right: 1px solid #252525;
+          display: flex;
+          flex-direction: column;
+          transition: left 0.25s ease;
+          z-index: 90;
+        }
+
+        .sidebarOpen {
+          left: 0;
+        }
+
+        .brand {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 28px;
+        }
+
+        .brand img {
+          width: 42px;
+          height: 42px;
+          border-radius: 12px;
+          object-fit: cover;
+        }
+
+        .brandName {
+          font-size: 20px;
+          font-weight: 700;
+          letter-spacing: 3px;
+        }
+
+        .brandSub {
+          color: #666;
+          font-size: 10px;
+          letter-spacing: 1px;
+          margin-top: 2px;
+        }
+
+        .newChat {
+          width: 100%;
+          padding: 13px;
+          border: 0;
+          border-radius: 11px;
+          background: #fff;
+          color: #000;
+          font-size: 14px;
+          font-weight: 700;
+          cursor: pointer;
+          margin-bottom: 16px;
+        }
+
+        .searchInput {
+          width: 100%;
+          padding: 11px 12px;
+          background: #181818;
+          border: 1px solid #2b2b2b;
+          border-radius: 10px;
+          color: #fff;
+          outline: none;
+          font-size: 13px;
+          margin-bottom: 16px;
+        }
+
+        .menu {
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+
+        .menu button {
+          width: 100%;
+          padding: 10px 11px;
+          border: 0;
+          border-radius: 9px;
+          background: transparent;
+          color: #999;
+          text-align: left;
+          font-size: 13px;
+          cursor: pointer;
+        }
+
+        .menu button:hover,
+        .menuActive {
+          background: #1f1f1f !important;
+          color: #fff !important;
+        }
+
+        .history {
+          flex: 1;
+          overflow-y: auto;
+          margin-top: 24px;
+          padding-right: 3px;
+        }
+
+        .historyTitle {
+          color: #666;
+          font-size: 10px;
+          letter-spacing: 1px;
+          margin-bottom: 10px;
+        }
+
+        .emptyHistory {
+          color: #666;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .chatItem {
+          display: flex;
+          align-items: center;
+          gap: 2px;
+          margin-bottom: 4px;
+          border-radius: 9px;
+        }
+
+        .chatItemActive {
+          background: #1d1d1d;
+        }
+
+        .chatOpen {
+          flex: 1;
+          min-width: 0;
+          padding: 10px;
+          border: 0;
+          background: transparent;
+          color: #aaa;
+          text-align: left;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          cursor: pointer;
+          font-size: 13px;
+        }
+
+        .chatItemActive .chatOpen {
+          color: #fff;
+        }
+
+        .chatAction {
+          width: 28px;
+          height: 28px;
+          border: 0;
+          background: transparent;
+          color: #555;
+          cursor: pointer;
+          border-radius: 6px;
+          flex-shrink: 0;
+        }
+
+        .chatAction:hover {
+          background: #292929;
+          color: #fff;
+        }
+
+        .pinned {
+          color: #fff;
+        }
+
+        .account {
+          border-top: 1px solid #252525;
+          padding-top: 17px;
+          margin-top: 15px;
+        }
+
+        .accountName {
+          font-size: 14px;
+          font-weight: 600;
+        }
+
+        .accountRole {
+          color: #777;
+          font-size: 12px;
+          margin-top: 3px;
+        }
+
+        .logout {
+          width: 100%;
+          padding: 10px;
+          margin-top: 13px;
+          background: transparent;
+          border: 1px solid #333;
+          border-radius: 9px;
+          color: #aaa;
+          cursor: pointer;
+        }
+
+        .logout:hover {
+          color: #fff;
+          border-color: #555;
+        }
+
+        .content {
+          width: 100%;
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+        }
+
+        .messages {
+          width: 900px;
+          max-width: 94%;
+          flex: 1;
+          overflow-y: auto;
+          padding-top: 85px;
+          padding-bottom: 20px;
+          scrollbar-width: thin;
+        }
+
+        .inputArea {
+          width: 900px;
+          max-width: 94%;
+          padding: 10px 0 20px;
+        }
+
+        .inputBox {
+          display: flex;
+          align-items: flex-end;
+          gap: 9px;
+          padding: 8px;
+          background: #151515;
+          border: 1px solid #303030;
+          border-radius: 18px;
+        }
+
+        .inputBox textarea {
+          flex: 1;
+          min-height: 48px;
+          max-height: 160px;
+          resize: none;
+          overflow-y: auto;
+          padding: 14px 12px;
+          background: transparent;
+          border: 0;
+          outline: 0;
+          color: #fff;
+          font-family: inherit;
+          font-size: 15px;
+          line-height: 1.5;
+        }
+
+        .inputBox textarea::placeholder {
+          color: #666;
+        }
+
+        .inputBox button {
+          height: 48px;
+          padding: 0 20px;
+          border: 0;
+          border-radius: 12px;
+          background: #fff;
+          color: #000;
+          font-weight: 700;
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+
+        .inputBox button:disabled {
+          background: #333;
+          color: #777;
+          cursor: not-allowed;
+        }
+
+        .disclaimer {
+          color: #555;
+          text-align: center;
+          font-size: 11px;
+          margin-top: 8px;
+        }
+
+        @media (max-width: 600px) {
+          .sidebar {
+            width: 285px;
+          }
+
+          .messages {
+            max-width: 92%;
+            padding-top: 78px;
+          }
+
+          .inputArea {
+            max-width: 92%;
+          }
+
+          .inputBox button {
+            padding: 0 15px;
+          }
+        }
+      `}</style>
     </main>
   );
 }
 
+/* WELCOME */
 
+function Welcome() {
+  return (
+    <div
+      style={{
+        minHeight: "100%",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        textAlign: "center",
+        padding: "40px 10px",
+      }}
+    >
+      <img
+        src="/logo.png"
+        alt="RootX"
+        style={{
+          width: 90,
+          height: 90,
+          borderRadius: 24,
+          objectFit: "cover",
+          marginBottom: 22,
+        }}
+      />
 
-function MenuItem({text}:{text:string}){
+      <h1
+        style={{
+          margin: "0 0 12px",
+          fontSize: "clamp(30px, 5vw, 48px)",
+        }}
+      >
+        Welcome to RootX
+      </h1>
 
-return(
-<div
-style={{
-padding:"12px 5px",
-color:"#cfcfcf",
-fontSize:"15px",
-cursor:"pointer",
-}}
->
-{text}
-</div>
-);
+      <p
+        style={{
+          margin: 0,
+          color: "#777",
+          fontSize: 14,
+        }}
+      >
+        Your AI assistant for coding, security and research.
+      </p>
+    </div>
+  );
+}
 
+/* MESSAGE */
+
+function MessageBubble({
+  message,
+}: {
+  message: Message;
+}) {
+  const user = message.role === "user";
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: user
+          ? "flex-end"
+          : "flex-start",
+        marginBottom: 28,
+        width: "100%",
+      }}
+    >
+      <div
+        style={{
+          maxWidth: user ? "75%" : "100%",
+          width: user ? "auto" : "100%",
+        }}
+      >
+        {!user && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 9,
+              marginBottom: 8,
+            }}
+          >
+            <img
+              src="/logo.png"
+              alt="RootX"
+              style={{
+                width: 27,
+                height: 27,
+                borderRadius: 8,
+                objectFit: "cover",
+              }}
+            />
+
+            <strong style={{ fontSize: 13 }}>
+              RootX
+            </strong>
+          </div>
+        )}
+
+        <div
+          style={{
+            background: user ? "#fff" : "transparent",
+            color: user ? "#000" : "#e7e7e7",
+            borderRadius: user ? 18 : 8,
+            padding: user ? "12px 16px" : 0,
+            lineHeight: 1.7,
+            fontSize: 15,
+            wordBreak: "break-word",
+          }}
+        >
+          <FormattedText text={message.text} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* FORMAT TEXT */
+
+function FormattedText({
+  text,
+}: {
+  text: string;
+}) {
+  const parts = text.split(/(```[\s\S]*?```)/g);
+
+  return (
+    <div>
+      {parts.map((part, index) => {
+        if (part.startsWith("```")) {
+          const content = part.slice(3, -3);
+          const lines = content.split("\n");
+
+          let language = "";
+          let code = content;
+
+          if (
+            lines.length > 0 &&
+            /^[a-zA-Z0-9_+#.-]+$/.test(
+              lines[0].trim()
+            )
+          ) {
+            language = lines[0].trim();
+            code = lines.slice(1).join("\n");
+          }
+
+          return (
+            <CodeBlock
+              key={index}
+              code={code}
+              language={language}
+            />
+          );
+        }
+
+        return (
+          <div
+            key={index}
+            style={{
+              whiteSpace: "pre-wrap",
+              marginBottom:
+                index < parts.length - 1
+                  ? 12
+                  : 0,
+            }}
+          >
+            {formatInline(part)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* INLINE FORMAT */
+
+function formatInline(text: string) {
+  const parts = text.split(
+    /(`[^`]+`|\*\*[^*]+\*\*)/g
+  );
+
+  return parts.map((part, index) => {
+    if (
+      part.startsWith("`") &&
+      part.endsWith("`")
+    ) {
+      return (
+        <code
+          key={index}
+          style={{
+            padding: "2px 5px",
+            borderRadius: 5,
+            background: "#222",
+            border: "1px solid #333",
+            fontFamily: "monospace",
+            fontSize: "0.9em",
+          }}
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+
+    if (
+      part.startsWith("**") &&
+      part.endsWith("**")
+    ) {
+      return (
+        <strong key={index}>
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+
+    return <span key={index}>{part}</span>;
+  });
+}
+
+/* CODE BLOCK */
+
+function CodeBlock({
+  code,
+  language,
+}: {
+  code: string;
+  language: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+
+      setTimeout(() => {
+        setCopied(false);
+      }, 1500);
+    } catch (error) {
+      console.error("Copy failed:", error);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        margin: "12px 0",
+        border: "1px solid #292929",
+        borderRadius: 12,
+        overflow: "hidden",
+        background: "#0d0d0d",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "8px 12px",
+          background: "#171717",
+          borderBottom: "1px solid #292929",
+        }}
+      >
+        <span
+          style={{
+            color: "#777",
+            fontSize: 11,
+            textTransform: "uppercase",
+          }}
+        >
+          {language || "code"}
+        </span>
+
+        <button
+          type="button"
+          onClick={() => void copy()}
+          style={{
+            padding: "5px 9px",
+            background: "transparent",
+            color: "#aaa",
+            border: "1px solid #333",
+            borderRadius: 7,
+            cursor: "pointer",
+            fontSize: 11,
+          }}
+        >
+          {copied ? "Copied!" : "Copy"}
+        </button>
+      </div>
+
+      <pre
+        style={{
+          margin: 0,
+          padding: 15,
+          overflowX: "auto",
+          color: "#e8e8e8",
+          fontSize: 13,
+          lineHeight: 1.6,
+          fontFamily: "monospace",
+        }}
+      >
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+/* TYPING */
+
+function Typing() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 9,
+        marginBottom: 25,
+        color: "#777",
+        fontSize: 13,
+      }}
+    >
+      <img
+        src="/logo.png"
+        alt="RootX"
+        style={{
+          width: 27,
+          height: 27,
+          borderRadius: 8,
+          objectFit: "cover",
+        }}
+      />
+
+      RootX is thinking...
+    </div>
+  );
+}
+
+/* CHAT ITEM */
+
+function ChatItem({
+  chat,
+  active,
+  onOpen,
+  onPin,
+  onDelete,
+}: {
+  chat: Chat;
+  active: boolean;
+  onOpen: () => void;
+  onPin: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className={`chatItem ${
+        active ? "chatItemActive" : ""
+      }`}
+    >
+      <button
+        type="button"
+        className="chatOpen"
+        onClick={onOpen}
+        title={chat.title}
+      >
+        {chat.title || "New Chat"}
+      </button>
+
+      <button
+        type="button"
+        className={`chatAction ${
+          chat.pinned ? "pinned" : ""
+        }`}
+        onClick={onPin}
+        title={chat.pinned ? "Unpin" : "Pin"}
+      >
+        ★
+      </button>
+
+      <button
+        type="button"
+        className="chatAction"
+        onClick={onDelete}
+        title="Delete"
+      >
+        ×
+      </button>
+    </div>
+  );
 }
