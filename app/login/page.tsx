@@ -1,8 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import {
+  GoogleAuthProvider,
+  browserLocalPersistence,
+  setPersistence,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  onAuthStateChanged,
+} from "firebase/auth";
+
 import { auth } from "../../lib/firebase";
 
 export default function LoginPage() {
@@ -11,31 +19,62 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
   const [error, setError] = useState("");
 
-  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  /*
+   * CHECK EXISTING LOGIN
+   *
+   * If the user has already logged in before,
+   * Firebase will restore the session automatically.
+   */
 
-    if (loading) return;
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        router.replace("/dashboard");
+        return;
+      }
+
+      setCheckingAuth(false);
+    });
+
+    return () => unsubscribe();
+  }, [router]);
+
+  /*
+   * EMAIL LOGIN
+   */
+
+  const handleLogin = async (
+    event: React.FormEvent<HTMLFormElement>
+  ) => {
+    event.preventDefault();
 
     setError("");
 
     const cleanEmail = email.trim();
 
-    if (!cleanEmail) {
-      setError("Please enter your email.");
+    if (!cleanEmail || !password) {
+      setError("Please enter your email and password.");
       return;
     }
 
-    if (!password) {
-      setError("Please enter your password.");
-      return;
-    }
+    setLoading(true);
 
     try {
-      setLoading(true);
+      /*
+       * IMPORTANT:
+       * This keeps the Firebase session saved
+       * even after the browser is closed.
+       */
+
+      await setPersistence(
+        auth,
+        browserLocalPersistence
+      );
 
       await signInWithEmailAndPassword(
         auth,
@@ -44,339 +83,447 @@ export default function LoginPage() {
       );
 
       router.replace("/dashboard");
-    } catch (error: unknown) {
+    } catch (error: any) {
       console.error("Login error:", error);
 
-      let message = "Unable to sign in. Please try again.";
+      switch (error?.code) {
+        case "auth/invalid-credential":
+          setError(
+            "Incorrect email or password."
+          );
+          break;
 
-      if (error instanceof Error) {
-        const firebaseError = error as Error & { code?: string };
+        case "auth/user-not-found":
+          setError(
+            "No account exists with this email."
+          );
+          break;
 
-        switch (firebaseError.code) {
-          case "auth/invalid-credential":
-            message = "Incorrect email or password.";
-            break;
+        case "auth/wrong-password":
+          setError(
+            "Incorrect password."
+          );
+          break;
 
-          case "auth/user-not-found":
-            message = "No RootX account was found with this email.";
-            break;
+        case "auth/invalid-email":
+          setError(
+            "Please enter a valid email address."
+          );
+          break;
 
-          case "auth/wrong-password":
-            message = "Incorrect password.";
-            break;
+        case "auth/too-many-requests":
+          setError(
+            "Too many attempts. Please try again later."
+          );
+          break;
 
-          case "auth/invalid-email":
-            message = "Please enter a valid email address.";
-            break;
+        case "auth/network-request-failed":
+          setError(
+            "Network error. Please check your internet connection."
+          );
+          break;
 
-          case "auth/user-disabled":
-            message = "This RootX account has been disabled.";
-            break;
-
-          case "auth/network-request-failed":
-            message = "Network error. Please check your internet connection.";
-            break;
-
-          default:
-            message = firebaseError.message || message;
-        }
+        default:
+          setError(
+            error?.message ||
+              "Login failed. Please try again."
+          );
       }
-
-      setError(message);
     } finally {
       setLoading(false);
     }
   };
 
+  /*
+   * GOOGLE LOGIN
+   */
+
+  const handleGoogleLogin = async () => {
+    setError("");
+    setLoading(true);
+
+    try {
+      const provider =
+        new GoogleAuthProvider();
+
+      /*
+       * Keep Google users logged in too.
+       */
+
+      await setPersistence(
+        auth,
+        browserLocalPersistence
+      );
+
+      await signInWithPopup(
+        auth,
+        provider
+      );
+
+      router.replace("/dashboard");
+    } catch (error: any) {
+      console.error(
+        "Google login error:",
+        error
+      );
+
+      if (
+        error?.code ===
+        "auth/popup-closed-by-user"
+      ) {
+        setError(
+          "Google login was cancelled."
+        );
+      } else if (
+        error?.code ===
+        "auth/popup-blocked"
+      ) {
+        setError(
+          "Your browser blocked the Google login popup."
+        );
+      } else {
+        setError(
+          error?.message ||
+            "Google login failed."
+        );
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /*
+   * LOADING SCREEN
+   */
+
+  if (checkingAuth) {
+    return (
+      <main className="page">
+        <div className="loadingBox">
+          <img
+            src="/logo.png"
+            alt="RootX"
+            className="loadingLogo"
+          />
+
+          <div className="loadingText">
+            Loading RootX...
+          </div>
+        </div>
+
+        <style jsx>{`
+          .page {
+            min-height: 100vh;
+            width: 100%;
+            background: #090909;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family:
+              Inter,
+              Arial,
+              Helvetica,
+              sans-serif;
+          }
+
+          .loadingBox {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 18px;
+          }
+
+          .loadingLogo {
+            width: 64px;
+            height: 64px;
+            border-radius: 17px;
+            object-fit: cover;
+          }
+
+          .loadingText {
+            color: #777;
+            font-size: 14px;
+          }
+        `}</style>
+      </main>
+    );
+  }
+
+  /*
+   * LOGIN PAGE
+   */
+
   return (
     <main className="page">
-      <svg
-        className="circleText"
-        viewBox="0 0 800 800"
-        aria-hidden="true"
-      >
-        <defs>
-          <path
-            id="circlePath"
-            d="
-              M 400 400
-              m -310 0
-              a 310 310 0 1 1 620 0
-              a 310 310 0 1 1 -620 0
-            "
+      <div className="backgroundGlow" />
+
+      <section className="loginCard">
+
+        {/* LOGO */}
+
+        <div className="logoWrapper">
+          <img
+            src="/logo.png"
+            alt="RootX"
+            className="logo"
           />
-        </defs>
+        </div>
 
-        <circle
-          cx="400"
-          cy="400"
-          r="310"
-          fill="none"
-          stroke="#dcdcdc"
-          strokeWidth="1"
-        />
+        {/* TITLE */}
 
-        <text
-          fill="#999"
-          fontSize="28"
-          fontWeight="800"
-          letterSpacing="8"
-        >
-          <textPath href="#circlePath">
-            AI • CODE • SECURITY • INTELLIGENCE • ROOTX • FUTURE • CYBER •
-            BUILD • CREATE • SECURE •
-          </textPath>
-        </text>
-      </svg>
-
-      <div className="glow" />
-
-      <form className="card" onSubmit={handleLogin}>
-        <img
-          src="/logo.png"
-          alt="RootX"
-          className="logo"
-        />
-
-        <h1>ROOTX</h1>
+        <h1>Welcome back</h1>
 
         <p className="subtitle">
-          Sign in to your AI workspace
+          Login to your RootX workspace
         </p>
 
+        {/* ERROR */}
+
         {error && (
-          <div className="errorBox" role="alert">
+          <div className="errorBox">
             {error}
           </div>
         )}
 
-        <label htmlFor="email">
-          Email
-        </label>
+        {/* EMAIL LOGIN */}
 
-        <input
-          id="email"
-          type="email"
-          placeholder="Enter your email"
-          value={email}
-          required
-          autoComplete="email"
-          disabled={loading}
-          onChange={(e) => setEmail(e.target.value)}
-        />
+        <form onSubmit={handleLogin}>
 
-        <label htmlFor="password">
-          Password
-        </label>
+          <label htmlFor="email">
+            Email
+          </label>
 
-        <div className="passwordWrapper">
+          <input
+            id="email"
+            type="email"
+            value={email}
+            onChange={(event) =>
+              setEmail(event.target.value)
+            }
+            placeholder="you@example.com"
+            autoComplete="email"
+            disabled={loading}
+          />
+
+          <label htmlFor="password">
+            Password
+          </label>
+
           <input
             id="password"
-            type={showPassword ? "text" : "password"}
-            placeholder="Enter your password"
+            type="password"
             value={password}
-            required
+            onChange={(event) =>
+              setPassword(
+                event.target.value
+              )
+            }
+            placeholder="Enter your password"
             autoComplete="current-password"
             disabled={loading}
-            onChange={(e) => setPassword(e.target.value)}
           />
 
           <button
-            type="button"
-            className="eyeButton"
-            onClick={() => setShowPassword((previous) => !previous)}
+            type="submit"
+            className="loginButton"
             disabled={loading}
-            aria-label={
-              showPassword
-                ? "Hide password"
-                : "Show password"
+          >
+            {loading
+              ? "Signing in..."
+              : "Login"}
+          </button>
+
+        </form>
+
+        {/* DIVIDER */}
+
+        <div className="divider">
+          <span />
+          <p>OR</p>
+          <span />
+        </div>
+
+        {/* GOOGLE */}
+
+        <button
+          type="button"
+          className="googleButton"
+          onClick={handleGoogleLogin}
+          disabled={loading}
+        >
+          <span className="googleIcon">
+            G
+          </span>
+
+          <span>
+            Continue with Google
+          </span>
+        </button>
+
+        {/* SIGNUP */}
+
+        <div className="signupText">
+          Don't have an account?
+
+          <button
+            type="button"
+            onClick={() =>
+              router.push("/signup")
             }
           >
-            {showPassword ? "◉" : "◌"}
+            Create account
           </button>
         </div>
 
-        <button
-          type="submit"
-          className="loginButton"
-          disabled={loading}
-        >
-          {loading ? "Signing in..." : "Login"}
-        </button>
-
-        <p className="login">
-          Don't have an account?{" "}
-          <span
-            onClick={() => {
-              if (!loading) {
-                router.push("/signup");
-              }
-            }}
-          >
-            Create Account
-          </span>
-        </p>
-      </form>
+      </section>
 
       <style jsx>{`
+        * {
+          box-sizing: border-box;
+        }
+
         .page {
           min-height: 100vh;
           width: 100%;
-          background: #ffffff;
+          background: #090909;
+          color: #fff;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 24px;
+          position: relative;
+          overflow: hidden;
+          font-family:
+            Inter,
+            Arial,
+            Helvetica,
+            sans-serif;
+        }
+
+        .backgroundGlow {
+          position: absolute;
+          width: 500px;
+          height: 500px;
+          border-radius: 50%;
+          background: rgba(
+            140,
+            255,
+            0,
+            0.035
+          );
+          filter: blur(100px);
+          pointer-events: none;
+        }
+
+        .loginCard {
+          width: 100%;
+          max-width: 420px;
+          background: #111;
+          border: 1px solid #292929;
+          border-radius: 22px;
+          padding: 36px;
+          position: relative;
+          z-index: 1;
+          box-shadow:
+            0 30px 80px
+              rgba(0, 0, 0, 0.45);
+        }
+
+        .logoWrapper {
           display: flex;
           justify-content: center;
-          align-items: center;
-          overflow: hidden;
-          position: fixed;
-          inset: 0;
-          color: black;
-          font-family: Inter, Arial, sans-serif;
-          padding: 20px;
-          box-sizing: border-box;
-        }
-
-        .circleText {
-          position: absolute;
-          width: 720px;
-          height: 720px;
-          animation: rotate 45s linear infinite;
-          pointer-events: none;
-        }
-
-        .glow {
-          position: absolute;
-          width: 250px;
-          height: 250px;
-          background: #8cff00;
-          filter: blur(140px);
-          opacity: 0.15;
-          z-index: 0;
-          pointer-events: none;
-        }
-
-        .card {
-          width: 390px;
-          max-width: 100%;
-          max-height: calc(100vh - 40px);
-          overflow-y: auto;
-          padding: 40px;
-          background: rgba(255, 255, 255, 0.96);
-          border: 1px solid #e5e5e5;
-          border-radius: 24px;
-          backdrop-filter: blur(20px);
-          z-index: 2;
-          box-shadow: 0 30px 100px rgba(0, 0, 0, 0.12);
-          box-sizing: border-box;
+          margin-bottom: 22px;
         }
 
         .logo {
-          width: 75px;
-          height: 75px;
+          width: 72px;
+          height: 72px;
           border-radius: 20px;
-          display: block;
-          margin: auto;
           object-fit: cover;
         }
 
         h1 {
+          margin: 0;
           text-align: center;
-          font-size: 34px;
-          letter-spacing: 2px;
-          margin: 20px 0 8px;
-          color: black;
+          font-size: 30px;
+          font-weight: 700;
+          letter-spacing: -0.5px;
         }
 
         .subtitle {
+          margin: 9px 0 28px;
+          color: #777;
           text-align: center;
-          color: #666;
-          margin: 0 0 30px;
+          font-size: 14px;
         }
 
         .errorBox {
-          background: #fff0f0;
-          border: 1px solid #ffcaca;
-          color: #c62828;
-          padding: 12px;
+          padding: 11px 13px;
+          margin-bottom: 18px;
+          border: 1px solid #4a2626;
           border-radius: 10px;
+          background: #211313;
+          color: #ff8f8f;
           font-size: 13px;
           line-height: 1.5;
-          margin-bottom: 20px;
         }
 
         label {
           display: block;
-          color: #444;
-          font-size: 14px;
-          margin-bottom: 8px;
+          color: #aaa;
+          font-size: 13px;
+          margin-bottom: 7px;
         }
 
         input {
           width: 100%;
-          box-sizing: border-box;
-          padding: 15px;
-          margin-bottom: 20px;
-          background: white;
-          border: 1px solid #d9d9d9;
-          border-radius: 12px;
-          color: black;
-          font-size: 15px;
+          height: 48px;
+          padding: 0 14px;
+          margin-bottom: 17px;
+          background: #181818;
+          border: 1px solid #303030;
+          border-radius: 11px;
+          color: #fff;
           outline: none;
+          font-size: 14px;
+          transition:
+            border-color 0.2s ease,
+            background 0.2s ease;
+        }
+
+        input::placeholder {
+          color: #555;
         }
 
         input:focus {
-          border-color: #888;
+          border-color: #555;
+          background: #1b1b1b;
         }
 
         input:disabled {
           opacity: 0.6;
-          cursor: not-allowed;
-        }
-
-        input::placeholder {
-          color: #999;
-        }
-
-        .passwordWrapper {
-          position: relative;
-        }
-
-        .passwordWrapper input {
-          padding-right: 52px;
-        }
-
-        .eyeButton {
-          position: absolute;
-          right: 8px;
-          top: 5px;
-          width: 40px;
-          height: 40px;
-          padding: 0;
-          background: transparent;
-          color: #666;
-          border: none;
-          cursor: pointer;
-          font-size: 20px;
-        }
-
-        .eyeButton:hover {
-          color: black;
         }
 
         .loginButton {
           width: 100%;
-          padding: 15px;
-          background: black;
-          color: white;
-          border: none;
-          border-radius: 14px;
+          height: 48px;
+          margin-top: 3px;
+          border: 0;
+          border-radius: 11px;
+          background: #fff;
+          color: #000;
+          font-size: 14px;
           font-weight: 700;
           cursor: pointer;
-          font-size: 15px;
-          transition: opacity 0.2s ease;
+          transition:
+            transform 0.15s ease,
+            opacity 0.15s ease;
         }
 
         .loginButton:hover:not(:disabled) {
-          opacity: 0.85;
+          transform: translateY(-1px);
         }
 
         .loginButton:disabled {
@@ -384,46 +531,98 @@ export default function LoginPage() {
           cursor: not-allowed;
         }
 
-        .login {
-          text-align: center;
-          color: #666;
-          margin-top: 25px;
-          font-size: 14px;
+        .divider {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin: 24px 0;
         }
 
-        .login span {
-          color: #36b300;
+        .divider span {
+          height: 1px;
+          flex: 1;
+          background: #292929;
+        }
+
+        .divider p {
+          margin: 0;
+          color: #555;
+          font-size: 10px;
+        }
+
+        .googleButton {
+          width: 100%;
+          height: 48px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          border: 1px solid #333;
+          border-radius: 11px;
+          background: #171717;
+          color: #fff;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+
+        .googleButton:hover:not(:disabled) {
+          background: #1d1d1d;
+          border-color: #444;
+        }
+
+        .googleButton:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .googleIcon {
+          width: 22px;
+          height: 22px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          background: #fff;
+          color: #4285f4;
+          font-size: 14px;
+          font-weight: 800;
+        }
+
+        .signupText {
+          margin-top: 24px;
+          text-align: center;
+          color: #666;
+          font-size: 13px;
+        }
+
+        .signupText button {
+          margin-left: 5px;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          color: #fff;
+          font-size: 13px;
           cursor: pointer;
           font-weight: 600;
         }
 
-        @keyframes rotate {
-          from {
-            transform: rotate(0deg);
-          }
-
-          to {
-            transform: rotate(360deg);
-          }
+        .signupText button:hover {
+          text-decoration: underline;
         }
 
-        @media (max-width: 700px) {
-          .circleText {
-            width: 600px;
-            height: 600px;
+        @media (max-width: 500px) {
+          .page {
+            padding: 16px;
           }
 
-          .card {
+          .loginCard {
             padding: 28px 22px;
-          }
-
-          .logo {
-            width: 65px;
-            height: 65px;
+            border-radius: 18px;
           }
 
           h1 {
-            font-size: 30px;
+            font-size: 27px;
           }
         }
       `}</style>
