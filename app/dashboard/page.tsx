@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signOut } from "firebase/auth";
+import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "../../lib/firebase";
 
 type Role = "user" | "rootx";
@@ -37,10 +37,32 @@ export default function Dashboard() {
 
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [userName, setUserName] = useState("RootX User");
+  const [attachment, setAttachment] = useState<File | null>(null);
+  const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
+  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
+  const [topMenuOpen, setTopMenuOpen] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
+
+  /* LOAD LOGGED-IN USER */
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setUserName(
+          user.displayName ||
+          user.email?.split("@")[0] ||
+          "RootX User"
+        );
+      } else {
+        setUserName("RootX User");
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   /* LOAD CHATS */
 
@@ -328,12 +350,35 @@ export default function Dashboard() {
     }
   };
 
+  /* ATTACHMENTS */
+  const chooseAttachment = (accept: string) => {
+    setShowAttachmentMenu(false);
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setAttachment(file);
+      setAttachmentPreview(
+        file.type.startsWith("image/") ? URL.createObjectURL(file) : null
+      );
+    };
+    input.click();
+  };
+
+  const removeAttachment = () => {
+    if (attachmentPreview) URL.revokeObjectURL(attachmentPreview);
+    setAttachment(null);
+    setAttachmentPreview(null);
+  };
+
   /* SEND MESSAGE */
 
   const sendMessage = async () => {
     const text = message.trim();
 
-    if (!text || loading) return;
+    if ((!text && !attachment) || loading) return;
 
     if (listening) {
       try {
@@ -343,15 +388,17 @@ export default function Dashboard() {
       setListening(false);
     }
 
-    const chatId = getChatId(text);
+    const chatId = getChatId(text || attachment?.name || "Attachment");
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: "user",
-      text,
+      text: text || `📎 ${attachment?.name || "Attachment"}`,
     };
 
+    const sentAttachment = attachment;
     setMessage("");
+    removeAttachment();
 
     setChats((prev) =>
       prev.map((chat) => {
@@ -374,7 +421,14 @@ export default function Dashboard() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          message: text,
+          message: text || `User attached: ${sentAttachment?.name || "a file"}`,
+          attachment: sentAttachment
+            ? {
+                name: sentAttachment.name,
+                type: sentAttachment.type,
+                size: sentAttachment.size,
+              }
+            : null,
         }),
       });
 
@@ -421,9 +475,6 @@ export default function Dashboard() {
         })
       );
 
-      /* SPEAK ROOTX RESPONSE */
-
-      speakResponse(String(reply));
     } catch (error) {
       console.error("RootX API error:", error);
 
@@ -526,6 +577,26 @@ export default function Dashboard() {
           : null
       );
     }
+  };
+
+  /* RENAME CHAT */
+
+  const renameChat = (id: string) => {
+    const chat = chats.find((item) => item.id === id);
+    if (!chat) return;
+
+    const nextTitle = window.prompt("Rename chat", chat.title);
+    const title = nextTitle?.trim();
+
+    if (!title) return;
+
+    setChats((prev) =>
+      prev.map((item) =>
+        item.id === id
+          ? { ...item, title: title.slice(0, 70) }
+          : item
+      )
+    );
   };
 
   /* LOGOUT */
@@ -730,7 +801,7 @@ export default function Dashboard() {
         <div className="account">
 
           <div className="accountName">
-            RootX User
+            {userName}
           </div>
 
           <div className="accountRole">
@@ -753,6 +824,108 @@ export default function Dashboard() {
 
       <section className="content">
 
+        <header className="chatHeader">
+          <div className="chatHeaderTitle">
+            <div className="chatHeaderText">
+              <strong>
+                {activeChat?.title || "New Chat"}
+              </strong>
+              <span>
+                {activeChat?.pinned ? "Pinned · " : ""}RootX AI Workspace
+              </span>
+            </div>
+          </div>
+
+          <div className="headerActions">
+            <button
+              type="button"
+              className="founderButton"
+              onClick={() => router.push("/founder")}
+              title="Meet the Founder"
+            >
+              <span className="founderIcon">◈</span>
+              <span className="founderButtonText">Founder</span>
+            </button>
+
+            {activeChat?.pinned && (
+              <span className="headerPin" title="Pinned chat">📌</span>
+            )}
+            <button
+              type="button"
+              className="headerDots"
+              onClick={() => setTopMenuOpen((v) => !v)}
+              aria-label="Chat options"
+              title="Chat options"
+            >
+              ⋯
+            </button>
+
+            {topMenuOpen && (
+              <>
+                <button
+                  type="button"
+                  className="topMenuBackdrop"
+                  aria-label="Close chat menu"
+                  onClick={() => setTopMenuOpen(false)}
+                />
+                <div className="topChatMenu">
+                  <div className="topMenuLabel">CHAT OPTIONS</div>
+
+                  <button
+                    type="button"
+                    disabled={!activeChat}
+                    onClick={() => {
+                      if (activeChat) togglePin(activeChat.id);
+                      setTopMenuOpen(false);
+                    }}
+                  >
+                    <span>📌</span>
+                    {activeChat?.pinned ? "Unpin chat" : "Pin chat"}
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!activeChat}
+                    onClick={() => {
+                      if (activeChat) renameChat(activeChat.id);
+                      setTopMenuOpen(false);
+                    }}
+                  >
+                    <span>✎</span>
+                    Rename chat
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      newChat();
+                      setTopMenuOpen(false);
+                    }}
+                  >
+                    <span>＋</span>
+                    New chat
+                  </button>
+
+                  <div className="topMenuDivider" />
+
+                  <button
+                    type="button"
+                    className="dangerMenuItem"
+                    disabled={!activeChat}
+                    onClick={() => {
+                      if (activeChat) deleteChat(activeChat.id);
+                      setTopMenuOpen(false);
+                    }}
+                  >
+                    <span>⌫</span>
+                    Delete chat
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </header>
+
         <div className="messages">
 
           {messages.length === 0 ? (
@@ -767,6 +940,9 @@ export default function Dashboard() {
                 <MessageBubble
                   key={msg.id}
                   message={msg}
+                  speaking={speaking}
+                  onSpeak={() => speakResponse(msg.text)}
+                  onStop={stopSpeaking}
                 />
 
               ))}
@@ -785,76 +961,83 @@ export default function Dashboard() {
 
         <div className="inputArea">
 
+          {attachment && (
+            <div className="attachmentPreview">
+              <div className="attachmentInfo">
+                {attachmentPreview ? (
+                  <img src={attachmentPreview} alt={attachment.name} />
+                ) : (
+                  <div className="fileIcon">📎</div>
+                )}
+                <div>
+                  <strong>{attachment.name}</strong>
+                  <span>{Math.max(1, Math.round(attachment.size / 1024))} KB</span>
+                </div>
+              </div>
+              <button type="button" onClick={removeAttachment} title="Remove attachment">×</button>
+            </div>
+          )}
+
           <div className="inputBox">
+            <div className="attachWrap">
+              <button
+                type="button"
+                className="plusButton"
+                onClick={() => setShowAttachmentMenu((v) => !v)}
+                disabled={loading}
+                title="Attach"
+              >
+                +
+              </button>
+
+              {showAttachmentMenu && (
+                <div className="attachmentMenu">
+                  <button type="button" onClick={() => chooseAttachment("image/*")}>
+                    <span>▣</span> Photos
+                  </button>
+                  <button type="button" onClick={() => chooseAttachment("image/*;capture=camera")}>
+                    <span>◉</span> Camera
+                  </button>
+                  <button type="button" onClick={() => chooseAttachment("*/*")}>
+                    <span>📎</span> Files
+                  </button>
+                </div>
+              )}
+            </div>
 
             <textarea
               ref={inputRef}
               value={message}
               disabled={loading}
               rows={1}
-              placeholder={
-                listening
-                  ? "Listening..."
-                  : "Message RootX..."
-              }
+              placeholder={listening ? "Listening..." : "Message RootX..."}
               onChange={(e) => {
-
-                setMessage(
-                  e.target.value
-                );
-
+                setMessage(e.target.value);
+                e.currentTarget.style.height = "auto";
                 e.currentTarget.style.height =
-                  "auto";
-
-                e.currentTarget.style.height =
-                  `${Math.min(
-                    e.currentTarget
-                      .scrollHeight,
-                    160
-                  )}px`;
+                  `${Math.min(e.currentTarget.scrollHeight, 160)}px`;
               }}
               onKeyDown={handleKeyDown}
             />
 
-            {/* MICROPHONE */}
-
             <button
               type="button"
-              className={`voiceButton ${
-                listening
-                  ? "voiceActive"
-                  : ""
-              }`}
+              className={`voiceButton ${listening ? "voiceActive" : ""}`}
               onClick={startVoiceInput}
               disabled={loading}
-              title={
-                listening
-                  ? "Stop listening"
-                  : "Speak to RootX"
-              }
+              title={listening ? "Stop listening" : "Speak to RootX"}
             >
-              {listening
-                ? "⏹"
-                : "🎤"}
+              {listening ? "⏹" : "🎙"}
             </button>
-
-            {/* SEND */}
 
             <button
               type="button"
-              disabled={
-                loading ||
-                !message.trim()
-              }
-              onClick={() =>
-                void sendMessage()
-              }
+              disabled={loading || (!message.trim() && !attachment)}
+              onClick={() => void sendMessage()}
+              title="Send message"
             >
-              {loading
-                ? "..."
-                : "Send"}
+              {loading ? "..." : "Send"}
             </button>
-
           </div>
 
           <div className="disclaimer">
@@ -1045,6 +1228,11 @@ export default function Dashboard() {
           padding-right: 3px;
         }
 
+        .history {
+          min-width: 0;
+          width: 100%;
+        }
+
         .historyTitle {
           color: #666;
           font-size: 10px;
@@ -1061,9 +1249,14 @@ export default function Dashboard() {
         .chatItem {
           display: flex;
           align-items: center;
-          gap: 2px;
-          margin-bottom: 4px;
+          gap: 3px;
+          margin: 0 0 3px 0;
+          padding: 0 2px 0 0;
           border-radius: 9px;
+          min-width: 0;
+          width: 100%;
+          height: 38px;
+          overflow: visible;
         }
 
         .chatItemActive {
@@ -1071,18 +1264,25 @@ export default function Dashboard() {
         }
 
         .chatOpen {
-          flex: 1;
+          display: block;
+          flex: 1 1 0;
           min-width: 0;
-          padding: 10px;
+          width: 0;
+          max-width: 100%;
+          height: 36px;
+          padding: 0 5px 0 10px;
           border: 0;
           background: transparent;
           color: #aaa;
           text-align: left;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
+          white-space: nowrap !important;
+          overflow: hidden !important;
+          text-overflow: ellipsis !important;
+          word-break: normal !important;
+          overflow-wrap: normal !important;
           cursor: pointer;
-          font-size: 13px;
+          font-size: 12px;
+          line-height: 36px;
         }
 
         .chatItemActive .chatOpen {
@@ -1150,6 +1350,241 @@ export default function Dashboard() {
           align-items: center;
         }
 
+        .chatHeader {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 70px;
+          padding: 10px 24px 10px 86px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          background: linear-gradient(to bottom, rgba(9,9,9,.98), rgba(9,9,9,.82), rgba(9,9,9,0));
+          z-index: 60;
+          pointer-events: none;
+        }
+
+        .chatHeaderTitle,
+        .headerActions {
+          pointer-events: auto;
+        }
+
+        .chatHeaderTitle {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .chatHeaderLogo {
+          width: 34px;
+          height: 34px;
+          border-radius: 10px;
+          overflow: hidden;
+          background: #151515;
+          border: 1px solid #292929;
+          flex-shrink: 0;
+        }
+
+        .chatHeaderLogo img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+
+        .chatHeaderText {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .chatHeaderText strong {
+          max-width: min(520px, 55vw);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-size: 13px;
+          font-weight: 600;
+          color: #eee;
+        }
+
+        .chatHeaderText span {
+          font-size: 9px;
+          letter-spacing: .7px;
+          text-transform: uppercase;
+          color: #555;
+        }
+
+        .headerActions {
+          position: relative;
+          display: flex;
+          align-items: center;
+          gap: 7px;
+        }
+
+        .founderButton {
+          height: 38px;
+          padding: 0 12px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          border: 1px solid #303030;
+          border-radius: 11px;
+          background: linear-gradient(
+            135deg,
+            rgba(25,25,25,.96),
+            rgba(14,14,14,.96)
+          );
+          color: #aaa;
+          cursor: pointer;
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: .7px;
+          text-transform: uppercase;
+          transition: .2s ease;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+        }
+
+        .founderIcon {
+          width: 19px;
+          height: 19px;
+          display: grid;
+          place-items: center;
+          border: 1px solid #3b3b3b;
+          border-radius: 6px;
+          color: #b8ff39;
+          font-size: 10px;
+          transition: .2s ease;
+        }
+
+        .founderButton:hover {
+          color: #fff;
+          border-color: #505050;
+          background: linear-gradient(
+            135deg,
+            rgba(35,35,35,.98),
+            rgba(18,18,18,.98)
+          );
+          transform: translateY(-1px);
+          box-shadow:
+            0 8px 24px rgba(0,0,0,.28),
+            0 0 18px rgba(160,255,45,.06);
+        }
+
+        .founderButton:hover .founderIcon {
+          color: #d5ff75;
+          border-color: #606060;
+          transform: rotate(45deg);
+        }
+
+        .headerPin {
+          display: grid;
+          place-items: center;
+          width: 34px;
+          height: 34px;
+          border: 1px solid #2c2c2c;
+          border-radius: 10px;
+          background: rgba(20,20,20,.9);
+          font-size: 12px;
+        }
+
+        .headerDots {
+          width: 38px;
+          height: 38px;
+          padding: 0;
+          border: 1px solid #2b2b2b;
+          border-radius: 11px;
+          background: rgba(18,18,18,.92);
+          color: #aaa;
+          cursor: pointer;
+          font-size: 21px;
+          line-height: 1;
+          letter-spacing: 1px;
+        }
+
+        .headerDots:hover {
+          color: #fff;
+          border-color: #444;
+          background: #1d1d1d;
+        }
+
+        .topChatMenu {
+          position: absolute;
+          top: 47px;
+          right: 0;
+          width: 190px;
+          padding: 7px;
+          border: 1px solid #303030;
+          border-radius: 14px;
+          background: rgba(20,20,20,.98);
+          box-shadow: 0 22px 55px rgba(0,0,0,.55);
+          z-index: 100;
+        }
+
+        .topMenuLabel {
+          padding: 7px 9px 6px;
+          color: #555;
+          font-size: 9px;
+          letter-spacing: 1.2px;
+          font-weight: 700;
+        }
+
+        .topChatMenu button {
+          width: 100%;
+          height: 38px;
+          border: 0;
+          border-radius: 9px;
+          background: transparent;
+          color: #ddd;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 0 9px;
+          text-align: left;
+          font-size: 11px;
+          cursor: pointer;
+        }
+
+        .topChatMenu button:hover:not(:disabled) {
+          background: #292929;
+          color: #fff;
+        }
+
+        .topChatMenu button:disabled {
+          opacity: .35;
+          cursor: not-allowed;
+        }
+
+        .topChatMenu button span {
+          width: 19px;
+          text-align: center;
+        }
+
+        .topMenuDivider {
+          height: 1px;
+          background: #2b2b2b;
+          margin: 5px 2px;
+        }
+
+        .dangerMenuItem:hover:not(:disabled) {
+          background: #2a1919 !important;
+          color: #ff8d8d !important;
+        }
+
+        .topMenuBackdrop {
+          position: fixed !important;
+          inset: 0 !important;
+          width: 100vw !important;
+          height: 100vh !important;
+          border: 0 !important;
+          padding: 0 !important;
+          background: transparent !important;
+          z-index: 99 !important;
+        }
+
         .messages {
           width: 900px;
           max-width: 94%;
@@ -1157,7 +1592,14 @@ export default function Dashboard() {
           overflow-y: auto;
           padding-top: 85px;
           padding-bottom: 20px;
-          scrollbar-width: thin;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+
+        .messages::-webkit-scrollbar {
+          width: 0;
+          height: 0;
+          display: none;
         }
 
         .inputArea {
@@ -1257,7 +1699,250 @@ export default function Dashboard() {
           color: #8cff00;
         }
 
+        .pinMark {
+          color: #aaa;
+          font-size: 10px;
+          flex-shrink: 0;
+          opacity: .9;
+          margin-right: 1px;
+        }
+
+        .menuDots {
+          width: 30px !important;
+          height: 30px !important;
+          padding: 0 !important;
+          font-size: 18px !important;
+          line-height: 1;
+          letter-spacing: 1px;
+        }
+
+        .chatMenu {
+          position: absolute;
+          right: 6px;
+          top: 39px;
+          width: 155px;
+          padding: 6px;
+          background: #191919;
+          border: 1px solid #343434;
+          border-radius: 12px;
+          box-shadow: 0 16px 45px rgba(0,0,0,.5);
+          z-index: 150;
+        }
+
+        .chatMenu button {
+          width: 100%;
+          height: 36px;
+          border: 0;
+          border-radius: 8px;
+          background: transparent;
+          color: #ddd;
+          text-align: left;
+          padding: 0 9px;
+          cursor: pointer;
+          font-size: 11px;
+          display: flex;
+          align-items: center;
+          gap: 9px;
+        }
+
+        .chatMenu button:hover {
+          background: #292929;
+        }
+
+        .chatMenu .deleteOption:hover {
+          background: #2a1919;
+          color: #ff8d8d;
+        }
+
+        .chatMenu button span {
+          width: 18px;
+          text-align: center;
+        }
+
+        .menuBackdrop {
+          position: fixed !important;
+          inset: 0 !important;
+          width: 100vw !important;
+          height: 100vh !important;
+          padding: 0 !important;
+          border: 0 !important;
+          background: transparent !important;
+          z-index: 149 !important;
+          cursor: default !important;
+        }
+
+        .attachmentPreview {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 8px;
+          padding: 9px 11px;
+          background: #151515;
+          border: 1px solid #303030;
+          border-radius: 14px;
+        }
+
+        .attachmentInfo {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .attachmentInfo img,
+        .fileIcon {
+          width: 42px;
+          height: 42px;
+          border-radius: 10px;
+          object-fit: cover;
+          background: #222;
+          display: grid;
+          place-items: center;
+          flex-shrink: 0;
+        }
+
+        .attachmentInfo strong {
+          display: block;
+          max-width: 620px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-size: 12px;
+        }
+
+        .attachmentInfo span {
+          display: block;
+          color: #666;
+          font-size: 10px;
+          margin-top: 3px;
+        }
+
+        .attachmentPreview > button {
+          width: 30px;
+          height: 30px;
+          border: 0;
+          border-radius: 8px;
+          background: #222;
+          color: #aaa;
+          cursor: pointer;
+          font-size: 18px;
+        }
+
+        .attachWrap {
+          position: relative;
+          flex-shrink: 0;
+        }
+
+        .plusButton {
+          width: 48px !important;
+          height: 48px !important;
+          padding: 0 !important;
+          border: 1px solid #333 !important;
+          border-radius: 12px !important;
+          background: #1b1b1b !important;
+          color: #fff !important;
+          font-size: 25px !important;
+          font-weight: 400 !important;
+        }
+
+        .attachmentMenu {
+          position: absolute;
+          left: 0;
+          bottom: 57px;
+          width: 185px;
+          padding: 7px;
+          background: rgba(20,20,20,.98);
+          border: 1px solid #333;
+          border-radius: 14px;
+          box-shadow: 0 18px 50px rgba(0,0,0,.45);
+          z-index: 20;
+        }
+
+        .attachmentMenu button {
+          width: 100% !important;
+          height: 40px !important;
+          padding: 0 10px !important;
+          border: 0 !important;
+          border-radius: 9px !important;
+          background: transparent !important;
+          color: #ddd !important;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          text-align: left;
+          font-size: 12px;
+          font-weight: 500 !important;
+        }
+
+        .attachmentMenu button:hover {
+          background: #292929 !important;
+        }
+
+        .messageTools {
+          display: flex;
+          align-items: center;
+          margin-top: 10px;
+        }
+
+        .speakButton {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          padding: 7px 11px;
+          border: 1px solid #2f2f2f;
+          border-radius: 9px;
+          background: #141414;
+          color: #aaa;
+          cursor: pointer;
+          font-size: 11px;
+          transition: .18s ease;
+        }
+
+        .speakButton:hover {
+          background: #222;
+          color: #fff;
+          border-color: #444;
+          transform: translateY(-1px);
+        }
+
+        .speakButtonActive {
+          color: #8cff00;
+          border-color: rgba(140,255,0,.35);
+        }
+
         @media (max-width: 600px) {
+          .chatHeader {
+            padding-left: 76px;
+            padding-right: 14px;
+          }
+
+          .chatHeaderText strong {
+            max-width: 42vw;
+          }
+
+          .chatHeaderLogo {
+            width: 30px;
+            height: 30px;
+          }
+
+          .founderButton {
+            height: 34px;
+            padding: 0 9px;
+            gap: 5px;
+            font-size: 9px;
+          }
+
+          .founderIcon {
+            width: 17px;
+            height: 17px;
+          }
+
+          .headerDots,
+          .headerPin {
+            width: 34px;
+            height: 34px;
+          }
 
           .sidebar {
             width: 285px;
@@ -1354,8 +2039,14 @@ function Welcome() {
 
 function MessageBubble({
   message,
+  speaking,
+  onSpeak,
+  onStop,
 }: {
   message: Message;
+  speaking: boolean;
+  onSpeak: () => void;
+  onStop: () => void;
 }) {
   const user =
     message.role === "user";
@@ -1383,39 +2074,7 @@ function MessageBubble({
         }}
       >
 
-        {!user && (
 
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 9,
-              marginBottom: 8,
-            }}
-          >
-
-            <img
-              src="/logo.png"
-              alt="RootX"
-              style={{
-                width: 27,
-                height: 27,
-                borderRadius: 8,
-                objectFit: "cover",
-              }}
-            />
-
-            <strong
-              style={{
-                fontSize: 13,
-              }}
-            >
-              RootX
-            </strong>
-
-          </div>
-
-        )}
 
         <div
           style={{
@@ -1440,6 +2099,19 @@ function MessageBubble({
           <FormattedText
             text={message.text}
           />
+
+          {!user && (
+            <div className="messageTools">
+              <button
+                type="button"
+                className={`speakButton ${speaking ? "speakButtonActive" : ""}`}
+                onClick={speaking ? onStop : onSpeak}
+                title={speaking ? "Stop reading" : "Read this response aloud"}
+              >
+                {speaking ? "■ Stop" : "◉ Listen"}
+              </button>
+            </div>
+          )}
         </div>
 
       </div>
@@ -1739,51 +2411,67 @@ function ChatItem({
   onPin: () => void;
   onDelete: () => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
   return (
     <div
-      className={`chatItem ${
-        active
-          ? "chatItemActive"
-          : ""
-      }`}
+      className={`chatItem ${active ? "chatItemActive" : ""}`}
+      style={{ position: "relative" }}
     >
-
       <button
         type="button"
         className="chatOpen"
         onClick={onOpen}
         title={chat.title}
       >
-        {chat.title ||
-          "New Chat"}
+        {chat.title || "New Chat"}
       </button>
+
+      {chat.pinned && <span className="pinMark" title="Pinned chat">📌</span>}
 
       <button
         type="button"
-        className={`chatAction ${
-          chat.pinned
-            ? "pinned"
-            : ""
-        }`}
-        onClick={onPin}
-        title={
-          chat.pinned
-            ? "Unpin"
-            : "Pin"
-        }
+        className="chatAction menuDots"
+        onClick={() => setMenuOpen((v) => !v)}
+        title="Chat options"
+        aria-label="Chat options"
       >
-        ★
+        ⋯
       </button>
 
-      <button
-        type="button"
-        className="chatAction"
-        onClick={onDelete}
-        title="Delete"
-      >
-        ×
-      </button>
-
+      {menuOpen && (
+        <>
+          <button
+            type="button"
+            className="menuBackdrop"
+            aria-label="Close menu"
+            onClick={() => setMenuOpen(false)}
+          />
+          <div className="chatMenu">
+            <button
+              type="button"
+              onClick={() => {
+                onPin();
+                setMenuOpen(false);
+              }}
+            >
+              <span>📌</span>
+              {chat.pinned ? "Unpin chat" : "Pin chat"}
+            </button>
+            <button
+              type="button"
+              className="deleteOption"
+              onClick={() => {
+                onDelete();
+                setMenuOpen(false);
+              }}
+            >
+              <span>⌫</span>
+              Delete chat
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
