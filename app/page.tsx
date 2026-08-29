@@ -20,22 +20,25 @@ export default function Home() {
   useEffect(() => {
     const current = texts[i];
 
-    const timer = setTimeout(() => {
-      if (!deleteMode) {
-        setText(current.substring(0, text.length + 1));
+    const timer = setTimeout(
+      () => {
+        if (!deleteMode) {
+          setText(current.substring(0, text.length + 1));
 
-        if (text === current) {
-          setTimeout(() => setDeleteMode(true), 1000);
-        }
-      } else {
-        setText(current.substring(0, text.length - 1));
+          if (text === current) {
+            setTimeout(() => setDeleteMode(true), 1000);
+          }
+        } else {
+          setText(current.substring(0, text.length - 1));
 
-        if (text === "") {
-          setDeleteMode(false);
-          setI((i + 1) % texts.length);
+          if (text === "") {
+            setDeleteMode(false);
+            setI((i + 1) % texts.length);
+          }
         }
-      }
-    }, deleteMode ? 40 : 80);
+      },
+      deleteMode ? 40 : 80
+    );
 
     return () => clearTimeout(timer);
   }, [text, deleteMode, i]);
@@ -43,11 +46,17 @@ export default function Home() {
   return (
     <main className="page">
 
-      {/* NAVBAR */}
+      {/* ================= NAVBAR ================= */}
+
       <nav className="navbar">
 
         <div className="brand">
-          <img src="/logo.png" className="logo" alt="RootX Logo" />
+          <img
+            src="/logo.png"
+            className="logo"
+            alt="RootX Logo"
+          />
+
           <span>ROOTX</span>
         </div>
 
@@ -72,7 +81,8 @@ export default function Home() {
       </nav>
 
 
-      {/* HERO */}
+      {/* ================= HERO ================= */}
+
       <section className="hero">
 
         <div className="glow"></div>
@@ -103,7 +113,9 @@ export default function Home() {
             onFocus={() => router.push("/login")}
           />
 
-          <button onClick={() => router.push("/login")}>
+          <button
+            onClick={() => router.push("/login")}
+          >
             ➤
           </button>
 
@@ -116,7 +128,8 @@ export default function Home() {
       </section>
 
 
-      {/* WHY ROOTX */}
+      {/* ================= WHY ROOTX ================= */}
+
       <section className="pageSection">
 
         <h2>Why RootX?</h2>
@@ -127,24 +140,30 @@ export default function Home() {
           with AI assistance.
         </p>
 
+
         <div className="cards">
 
           <div>
             <h3>💻 AI Coding</h3>
+
             <p>
               Write, debug and improve code faster.
             </p>
           </div>
 
+
           <div>
             <h3>🔐 Cybersecurity</h3>
+
             <p>
               Learn security concepts and technical skills.
             </p>
           </div>
 
+
           <div>
             <h3>🧠 Smart Research</h3>
+
             <p>
               Understand complex topics instantly.
             </p>
@@ -155,7 +174,8 @@ export default function Home() {
       </section>
 
 
-      {/* BUILD */}
+      {/* ================= BUILD ================= */}
+
       <section className="pageSection dark">
 
         <h2>
@@ -170,7 +190,8 @@ export default function Home() {
       </section>
 
 
-      {/* FUTURE */}
+      {/* ================= FUTURE ================= */}
+
       <section className="pageSection">
 
         <h2>
@@ -192,11 +213,14 @@ export default function Home() {
       </section>
 
 
-      {/* FOOTER */}
+      {/* ================= FOOTER ================= */}
+
       <footer>
         RootX © 2026 — AI for the next generation of builders.
       </footer>
 
+
+      {/* ================= CSS ================= */}
 
       <style jsx>{`
 
@@ -208,7 +232,9 @@ export default function Home() {
           background: #050505;
           color: white;
           font-family: Arial, sans-serif;
+
           min-height: 100vh;
+
           overflow-x: hidden;
         }
 
@@ -219,19 +245,25 @@ export default function Home() {
 
         .navbar {
           position: fixed;
-          top: 0;
+
+          top: env(safe-area-inset-top, 0px);
           left: 0;
+
           width: 100%;
+
           height: 80px;
 
           display: flex;
+
           justify-content: space-between;
           align-items: center;
 
           padding: 0 8%;
+
           box-sizing: border-box;
 
           background: rgba(5, 5, 5, 0.75);
+
           backdrop-filter: blur(15px);
           -webkit-backdrop-filter: blur(15px);
 
@@ -239,15 +271,23 @@ export default function Home() {
         }
 
 
+        /* =========================
+           BRAND
+        ========================= */
+
         .brand {
           display: flex;
+
           align-items: center;
+
           gap: 12px;
 
           font-size: 25px;
+
           font-weight: bold;
 
           flex-shrink: 0;
+
           white-space: nowrap;
         }
 
@@ -255,30 +295,35 @@ export default function Home() {
         .logo {
           width: 45px;
           height: 45px;
+
           border-radius: 12px;
+
           object-fit: contain;
         }
 
 
-        /* IMPORTANT:
-           Keeps Login + Get Started
-           on the same line.
-        */
+        /* =========================
+           NAV BUTTONS
+        ========================= */
 
         .navButtons {
           display: flex;
+
           align-items: center;
+
           justify-content: flex-end;
 
           gap: 10px;
 
           flex-shrink: 0;
+
           white-space: nowrap;
         }
 
 
         .login {
           background: transparent;
+
           color: white;
 
           border: 1px solid #333;
@@ -290,12 +335,15 @@ export default function Home() {
           cursor: pointer;
 
           white-space: nowrap;
+
+          font-size: 14px;
         }
 
 
         .signup,
         .join {
           background: #8cff00;
+
           color: black;
 
           border: none;
@@ -309,6 +357,8 @@ export default function Home() {
           cursor: pointer;
 
           white-space: nowrap;
+
+          font-size: 14px;
         }
 
 
@@ -331,8 +381,11 @@ export default function Home() {
           min-height: 100vh;
 
           display: flex;
+
           flex-direction: column;
+
           justify-content: center;
+
           align-items: center;
 
           text-align: center;
@@ -370,17 +423,20 @@ export default function Home() {
           object-fit: contain;
 
           position: relative;
+
           z-index: 1;
         }
 
 
         .hero h1 {
           font-size: 80px;
+
           letter-spacing: 8px;
 
           margin: 25px 0 10px;
 
           position: relative;
+
           z-index: 1;
         }
 
@@ -399,9 +455,14 @@ export default function Home() {
           margin: 0;
 
           position: relative;
+
           z-index: 1;
         }
 
+
+        /* =========================
+           TYPING CURSOR
+        ========================= */
 
         .cursor {
           animation: blink 0.8s infinite;
@@ -409,6 +470,7 @@ export default function Home() {
 
 
         @keyframes blink {
+
           0%,
           50% {
             opacity: 1;
@@ -418,6 +480,7 @@ export default function Home() {
           100% {
             opacity: 0;
           }
+
         }
 
 
@@ -442,6 +505,7 @@ export default function Home() {
           display: flex;
 
           width: 500px;
+
           max-width: 90%;
 
           margin-top: 30px;
@@ -477,6 +541,11 @@ export default function Home() {
         }
 
 
+        .searchBox input::placeholder {
+          color: #888;
+        }
+
+
         .searchBox button {
           background: #8cff00;
 
@@ -487,6 +556,7 @@ export default function Home() {
           border-radius: 50%;
 
           width: 45px;
+
           height: 45px;
 
           flex-shrink: 0;
@@ -510,9 +580,11 @@ export default function Home() {
           min-height: 100vh;
 
           display: flex;
+
           flex-direction: column;
 
           justify-content: center;
+
           align-items: center;
 
           text-align: center;
@@ -603,9 +675,11 @@ export default function Home() {
             padding: 0 25px;
           }
 
+
           .brand {
             font-size: 22px;
           }
+
 
           .logo {
             width: 40px;
@@ -622,15 +696,26 @@ export default function Home() {
         @media (max-width: 600px) {
 
           .navbar {
+
+            /*
+             * Small extra space below
+             * Android status bar.
+             */
+
+            top: env(safe-area-inset-top, 8px);
+
             height: 70px;
 
-            padding: 0 14px;
+            padding: 8px 14px 0;
 
             gap: 8px;
+
+            box-sizing: border-box;
           }
 
 
           .brand {
+
             font-size: 19px;
 
             gap: 7px;
@@ -640,7 +725,9 @@ export default function Home() {
 
 
           .logo {
+
             width: 36px;
+
             height: 36px;
 
             border-radius: 9px;
@@ -648,36 +735,47 @@ export default function Home() {
 
 
           .navButtons {
+
             gap: 6px;
           }
 
 
           .login {
+
             padding: 9px 12px;
 
             font-size: 13px;
+
+            min-height: 40px;
           }
 
 
           .signup {
+
             padding: 9px 12px;
 
             font-size: 13px;
+
+            min-height: 40px;
           }
 
 
           .hero {
-            padding-top: 100px;
+
+            padding-top: 110px;
           }
 
 
           .heroLogo {
+
             width: 95px;
+
             height: 95px;
           }
 
 
           .hero h1 {
+
             font-size: 52px;
 
             letter-spacing: 6px;
@@ -687,6 +785,7 @@ export default function Home() {
 
 
           .hero h2 {
+
             font-size: 24px;
 
             min-height: 100px;
@@ -696,6 +795,7 @@ export default function Home() {
 
 
           .hero p {
+
             font-size: 16px;
 
             max-width: 340px;
@@ -703,6 +803,7 @@ export default function Home() {
 
 
           .searchBox {
+
             max-width: 92%;
 
             margin-top: 20px;
@@ -710,16 +811,19 @@ export default function Home() {
 
 
           .pageSection {
+
             padding: 70px 25px;
           }
 
 
           .pageSection h2 {
+
             font-size: 35px;
           }
 
 
           .pageSection p {
+
             font-size: 16px;
           }
 
@@ -733,27 +837,35 @@ export default function Home() {
         @media (max-width: 380px) {
 
           .navbar {
-            padding: 0 9px;
+
+            padding-left: 9px;
+
+            padding-right: 9px;
           }
 
 
           .brand {
+
             font-size: 17px;
           }
 
 
           .logo {
+
             width: 32px;
+
             height: 32px;
           }
 
 
           .navButtons {
+
             gap: 4px;
           }
 
 
           .login {
+
             padding: 8px 9px;
 
             font-size: 12px;
@@ -761,6 +873,7 @@ export default function Home() {
 
 
           .signup {
+
             padding: 8px 9px;
 
             font-size: 12px;
