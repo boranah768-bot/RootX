@@ -4,6 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "../../lib/firebase";
+import { Capacitor } from "@capacitor/core";
+import { Camera, CameraResultType, CameraSource } from "@capacitor/camera";
+import { FilePicker } from "@capawesome/capacitor-file-picker";
+import { SpeechRecognition } from "@capgo/capacitor-speech-recognition";
+import { SpeechSynthesis } from "@capgo/capacitor-speech-synthesis";
 
 type Role = "user" | "rootx";
 
@@ -47,11 +52,7 @@ export default function Dashboard() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
 
-  // Keep native file inputs mounted so mobile browsers reliably open
-  // Photos, Camera and Files from a real user tap.
-  const photoInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
 
   /* LOAD LOGGED-IN USER */
   useEffect(() => {
@@ -217,174 +218,257 @@ export default function Dashboard() {
 
   /* STOP VOICE OUTPUT */
 
-  const stopSpeaking = () => {
-    if (typeof window === "undefined") return;
-
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
+  const stopSpeaking = async () => {
+    try {
+      await SpeechSynthesis.cancel();
+    } catch (error) {
+      console.error("Could not stop speech:", error);
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    } finally {
+      setSpeaking(false);
     }
-
-    setSpeaking(false);
   };
 
-  /* ROOTX VOICE OUTPUT */
+  /* ROOTX VOICE OUTPUT - NATIVE ON CAPACITOR */
 
-  const speakResponse = (text: string) => {
-    if (typeof window === "undefined") return;
-
-    if (!("speechSynthesis" in window)) {
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-
+  const speakResponse = async (text: string) => {
     const cleanText = text
-      .replace(/```[\s\S]*?```/g, "Code omitted.")
-      .replace(/[*_#`]/g, "")
+      .replace(/```[\s\S]*?```/g, " Code omitted. ")
+      .replace(/[#*_`|>-]/g, " ")
+      .replace(/\s+/g, " ")
       .trim();
 
     if (!cleanText) return;
 
-    const utterance =
-      new SpeechSynthesisUtterance(cleanText);
+    try {
+      await SpeechSynthesis.cancel();
+      await SpeechSynthesis.removeAllListeners();
 
-    utterance.lang = "en-IN";
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    utterance.volume = 1;
+      await SpeechSynthesis.addListener("start", () => {
+        setSpeaking(true);
+      });
 
-    utterance.onstart = () => {
+      await SpeechSynthesis.addListener("end", () => {
+        setSpeaking(false);
+      });
+
+      await SpeechSynthesis.addListener("error", (event: any) => {
+        console.error("Native speech synthesis error:", event?.error || event);
+        setSpeaking(false);
+      });
+
+      const availability = await SpeechSynthesis.isAvailable();
+      if (!availability.isAvailable) {
+        throw new Error("Speech synthesis is not available on this device.");
+      }
+
+      await SpeechSynthesis.initialize();
       setSpeaking(true);
-    };
 
-    utterance.onend = () => {
+      await SpeechSynthesis.speak({
+        text: cleanText,
+        language: "en-IN",
+        pitch: 1,
+        rate: 0.95,
+        volume: 1,
+        queueStrategy: "Flush",
+      });
+    } catch (error) {
+      console.error("Native TTS failed:", error);
       setSpeaking(false);
-    };
 
-    utterance.onerror = () => {
-      setSpeaking(false);
-    };
+      // Browser fallback for desktop testing.
+      if (
+        typeof window !== "undefined" &&
+        "speechSynthesis" in window &&
+        typeof SpeechSynthesisUtterance !== "undefined"
+      ) {
+        try {
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(cleanText);
+          utterance.lang = "en-IN";
+          utterance.rate = 0.95;
+          utterance.pitch = 1;
+          utterance.volume = 1;
+          utterance.onstart = () => setSpeaking(true);
+          utterance.onend = () => setSpeaking(false);
+          utterance.onerror = () => setSpeaking(false);
+          window.speechSynthesis.speak(utterance);
+          return;
+        } catch {}
+      }
 
-    window.speechSynthesis.speak(utterance);
+      alert("Voice playback could not start. Make sure the Android Text-to-Speech engine is enabled.");
+    }
   };
 
-  /* VOICE INPUT */
+  /* VOICE INPUT - NATIVE ON CAPACITOR */
 
-  const startVoiceInput = () => {
-    if (typeof window === "undefined") return;
-
-    const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      alert(
-        "Voice input is not supported in this browser. Please use Google Chrome or Microsoft Edge."
-      );
-      return;
-    }
-
+  const startVoiceInput = async () => {
     if (listening) {
       try {
-        recognitionRef.current?.stop();
-      } catch {}
-
-      setListening(false);
+        await SpeechRecognition.stop();
+      } catch (error) {
+        console.error("Could not stop speech recognition:", error);
+      } finally {
+        setListening(false);
+      }
       return;
     }
 
     try {
-      const recognition = new SpeechRecognition();
+      const availability = await SpeechRecognition.available();
+      if (!availability.available) {
+        throw new Error("Speech recognition is not available on this device.");
+      }
 
-      recognition.lang = "en-IN";
-      recognition.continuous = false;
-      recognition.interimResults = true;
-      recognition.maxAlternatives = 1;
+      let permission = await SpeechRecognition.checkPermissions();
+      if (permission.speechRecognition !== "granted") {
+        permission = await SpeechRecognition.requestPermissions();
+      }
 
-      recognition.onstart = () => {
-        setListening(true);
-      };
+      if (permission.speechRecognition !== "granted") {
+        alert("Microphone permission is required. Open Android Settings → Apps → RootX → Permissions → Microphone → Allow.");
+        return;
+      }
 
-      recognition.onresult = (event: any) => {
-        let transcript = "";
+      await SpeechRecognition.removeAllListeners();
+      setListening(true);
 
-        for (
-          let i = event.resultIndex;
-          i < event.results.length;
-          i++
-        ) {
-          transcript +=
-            event.results[i][0].transcript;
-        }
+      // Android's native speech dialog returns the final sentence reliably.
+      const result = await SpeechRecognition.start({
+        language: "en-IN",
+        maxResults: 1,
+        prompt: "Speak to RootX",
+        popup: true,
+        partialResults: false,
+      });
 
-        setMessage(transcript.trim());
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error(
-          "Voice recognition error:",
-          event.error
-        );
-
-        setListening(false);
-
-        if (event.error === "not-allowed") {
-          alert(
-            "Microphone permission was denied. Please allow microphone access for RootX."
-          );
-        }
-      };
-
-      recognition.onend = () => {
-        setListening(false);
-
-        setTimeout(() => {
-          inputRef.current?.focus();
-        }, 100);
-      };
-
-      recognitionRef.current = recognition;
-
-      recognition.start();
+      const transcript = result.matches?.[0]?.trim();
+      if (transcript) {
+        setMessage(transcript);
+        setTimeout(() => inputRef.current?.focus(), 100);
+      }
     } catch (error) {
-      console.error(
-        "Could not start voice recognition:",
-        error
-      );
+      console.error("Native speech recognition failed:", error);
 
-      setListening(false);
+      // Browser fallback for desktop Chrome.
+      if (typeof window !== "undefined") {
+        const BrowserRecognition =
+          (window as any).SpeechRecognition ||
+          (window as any).webkitSpeechRecognition;
+
+        if (BrowserRecognition) {
+          try {
+            const recognition = new BrowserRecognition();
+            recognition.lang = "en-IN";
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+            recognition.onstart = () => setListening(true);
+            recognition.onresult = (event: any) => {
+              const transcript = event.results?.[0]?.[0]?.transcript?.trim();
+              if (transcript) setMessage(transcript);
+            };
+            recognition.onend = () => setListening(false);
+            recognition.onerror = () => setListening(false);
+            recognitionRef.current = recognition;
+            recognition.start();
+            return;
+          } catch {}
+        }
+      }
+
+      alert("Microphone could not start. Check RootX microphone permission in Android Settings.");
+    } finally {
+      if (Capacitor.isNativePlatform()) {
+        setListening(false);
+      }
     }
   };
 
-  /* ATTACHMENTS */
+  /* NATIVE ATTACHMENTS */
 
-  const handleAttachment = (file: File | null) => {
-    if (!file) return;
-
-    if (attachmentPreview) {
-      URL.revokeObjectURL(attachmentPreview);
-    }
-
+  const setPickedFile = (file: File) => {
+    if (attachmentPreview) URL.revokeObjectURL(attachmentPreview);
     setAttachment(file);
     setAttachmentPreview(
-      file.type.startsWith("image/")
-        ? URL.createObjectURL(file)
-        : null
+      file.type.startsWith("image/") ? URL.createObjectURL(file) : null
     );
     setShowAttachmentMenu(false);
   };
 
-  const openAttachmentPicker = (kind: "photos" | "camera" | "files") => {
-    setShowAttachmentMenu(false);
+  const blobFromNativePath = async (path?: string, blob?: Blob) => {
+    if (blob) return blob;
+    if (!path) throw new Error("No file path returned by picker.");
+    const src = Capacitor.convertFileSrc(path);
+    const response = await fetch(src);
+    if (!response.ok) throw new Error("Could not read selected file.");
+    return await response.blob();
+  };
 
-    // Calling click() directly from the button event keeps the action
-    // trusted on Android/iOS browsers.
-    if (kind === "photos") {
-      photoInputRef.current?.click();
-    } else if (kind === "camera") {
-      cameraInputRef.current?.click();
-    } else {
-      fileInputRef.current?.click();
+  const choosePhoto = async () => {
+    try {
+      const result = await FilePicker.pickImages({ limit: 1 });
+      const picked = result.files?.[0];
+      if (!picked) return;
+
+      const blob = await blobFromNativePath(picked.path, picked.blob);
+      const name = picked.name || `rootx-photo-${Date.now()}.jpg`;
+      const type = picked.mimeType || blob.type || "image/jpeg";
+      setPickedFile(new File([blob], name, { type }));
+    } catch (error: any) {
+      if (!/cancel|dismiss/i.test(String(error?.message || error))) {
+        console.error("Photo picker error:", error);
+        alert("Could not open Photos. Please try again.");
+      }
+    }
+  };
+
+  const chooseCamera = async () => {
+    try {
+      const photo = await Camera.getPhoto({
+        source: CameraSource.Camera,
+        resultType: CameraResultType.Uri,
+        quality: 85,
+        correctOrientation: true,
+        saveToGallery: false,
+      });
+
+      if (!photo.webPath) return;
+      const response = await fetch(photo.webPath);
+      const blob = await response.blob();
+      const type = blob.type || `image/${photo.format || "jpeg"}`;
+      setPickedFile(
+        new File([blob], `rootx-camera-${Date.now()}.${photo.format || "jpeg"}`, {
+          type,
+        })
+      );
+    } catch (error: any) {
+      if (!/cancel|dismiss/i.test(String(error?.message || error))) {
+        console.error("Camera error:", error);
+        alert("Could not open Camera. Check RootX camera permission in Android Settings.");
+      }
+    }
+  };
+
+  const chooseFile = async () => {
+    try {
+      const result = await FilePicker.pickFiles({ limit: 1 });
+      const picked = result.files?.[0];
+      if (!picked) return;
+
+      const blob = await blobFromNativePath(picked.path, picked.blob);
+      const name = picked.name || `rootx-file-${Date.now()}`;
+      const type = picked.mimeType || blob.type || "application/octet-stream";
+      setPickedFile(new File([blob], name, { type }));
+    } catch (error: any) {
+      if (!/cancel|dismiss/i.test(String(error?.message || error))) {
+        console.error("File picker error:", error);
+        alert("Could not open Files. Please try again.");
+      }
     }
   };
 
@@ -392,12 +476,6 @@ export default function Dashboard() {
     if (attachmentPreview) URL.revokeObjectURL(attachmentPreview);
     setAttachment(null);
     setAttachmentPreview(null);
-
-    // Reset the native inputs so selecting the same file again still
-    // triggers an onChange event.
-    if (photoInputRef.current) photoInputRef.current.value = "";
-    if (cameraInputRef.current) cameraInputRef.current.value = "";
-    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   useEffect(() => {
@@ -450,14 +528,20 @@ export default function Dashboard() {
     try {
       let attachmentData: string | null = null;
 
-      // Send the actual image to the API when it is reasonably small.
-      // This makes photo/camera attachments real attachments rather than
-      // only sending the filename. Larger files still appear correctly
-      // in the chat and are sent as metadata.
-      if (sentAttachment && sentAttachment.type.startsWith("image/") && sentAttachment.size <= 6 * 1024 * 1024) {
+      // Include the actual image for AI vision when it is small enough.
+      if (
+        sentAttachment &&
+        sentAttachment.type.startsWith("image/") &&
+        sentAttachment.size <= 6 * 1024 * 1024
+      ) {
         attachmentData = await new Promise<string | null>((resolve) => {
           const reader = new FileReader();
-          reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+          reader.onload = () =>
+            resolve(
+              typeof reader.result === "string"
+                ? reader.result
+                : null
+            );
           reader.onerror = () => resolve(null);
           reader.readAsDataURL(sentAttachment);
         });
@@ -1008,36 +1092,6 @@ export default function Dashboard() {
 
         {/* INPUT */}
 
-        {/* Native inputs stay mounted for reliable mobile attachment actions. */}
-        <input
-          ref={photoInputRef}
-          className="nativeAttachmentInput"
-          type="file"
-          accept="image/*"
-          onChange={(e) => handleAttachment(e.target.files?.[0] || null)}
-          tabIndex={-1}
-          aria-hidden="true"
-        />
-        <input
-          ref={cameraInputRef}
-          className="nativeAttachmentInput"
-          type="file"
-          accept="image/*"
-          capture="environment"
-          onChange={(e) => handleAttachment(e.target.files?.[0] || null)}
-          tabIndex={-1}
-          aria-hidden="true"
-        />
-        <input
-          ref={fileInputRef}
-          className="nativeAttachmentInput"
-          type="file"
-          accept="*/*"
-          onChange={(e) => handleAttachment(e.target.files?.[0] || null)}
-          tabIndex={-1}
-          aria-hidden="true"
-        />
-
         <div className="inputArea">
 
           {attachment && (
@@ -1071,13 +1125,13 @@ export default function Dashboard() {
 
               {showAttachmentMenu && (
                 <div className="attachmentMenu" role="menu">
-                  <button type="button" role="menuitem" onClick={() => openAttachmentPicker("photos")}>
+                  <button type="button" className="attachmentMenuItem" onClick={() => void choosePhoto()}>
                     <span>▣</span> Photos
                   </button>
-                  <button type="button" role="menuitem" onClick={() => openAttachmentPicker("camera")}>
+                  <button type="button" className="attachmentMenuItem" onClick={() => void chooseCamera()}>
                     <span>◉</span> Camera
                   </button>
-                  <button type="button" role="menuitem" onClick={() => openAttachmentPicker("files")}>
+                  <button type="button" className="attachmentMenuItem" onClick={() => void chooseFile()}>
                     <span>📎</span> Files
                   </button>
                 </div>
@@ -1153,7 +1207,7 @@ export default function Dashboard() {
 
       </section>
 
-      <style jsx>{`
+      <style jsx global>{`
 
         * {
           box-sizing: border-box;
@@ -1170,148 +1224,6 @@ export default function Dashboard() {
             Helvetica,
             sans-serif;
           overflow: hidden;
-        }
-
-        .messageRow {
-          display: flex;
-          width: 100%;
-          margin: 0 0 30px;
-        }
-
-        .messageRowUser {
-          justify-content: flex-end;
-        }
-
-        .messageRowRootX {
-          justify-content: flex-start;
-        }
-
-        .userMessageWrap {
-          max-width: 78%;
-          min-width: 0;
-        }
-
-        .rootxMessageWrap {
-          width: 100%;
-          min-width: 0;
-        }
-
-        .userBubble {
-          background: #fff;
-          color: #000;
-          border-radius: 18px;
-          padding: 12px 16px;
-          line-height: 1.55;
-          font-size: 15px;
-          overflow-wrap: anywhere;
-        }
-
-        .rootxBubble {
-          width: 100%;
-          color: #e7e7e7;
-          font-size: 15px;
-          line-height: 1.72;
-          overflow-wrap: anywhere;
-          word-break: normal;
-          white-space: normal;
-        }
-
-        .formattedText {
-          width: 100%;
-          min-width: 0;
-        }
-
-        .markdownBlocks {
-          width: 100%;
-        }
-
-        .mdParagraph {
-          margin: 0 0 16px;
-          line-height: 1.75;
-          overflow-wrap: break-word;
-          word-break: normal;
-        }
-
-        .mdParagraph:last-child {
-          margin-bottom: 0;
-        }
-
-        .mdHeading {
-          margin: 24px 0 11px;
-          color: #f4f4f4;
-          line-height: 1.3;
-          font-weight: 700;
-        }
-
-        .mdHeading:first-child {
-          margin-top: 0;
-        }
-
-        .mdHeading {
-          font-size: 20px;
-        }
-
-        h3.mdHeading {
-          font-size: 17px;
-        }
-
-        h4.mdHeading {
-          font-size: 15px;
-        }
-
-        .mdList {
-          margin: 0 0 17px;
-          padding-left: 24px;
-        }
-
-        .mdList li {
-          margin: 7px 0;
-          padding-left: 4px;
-          line-height: 1.65;
-        }
-
-        .mdTableWrap {
-          width: 100%;
-          overflow-x: auto;
-          margin: 17px 0 20px;
-          border: 1px solid #292929;
-          border-radius: 12px;
-          background: #101010;
-          scrollbar-width: thin;
-        }
-
-        .mdTable {
-          width: 100%;
-          min-width: 420px;
-          border-collapse: collapse;
-          font-size: 13px;
-          line-height: 1.55;
-        }
-
-        .mdTable th,
-        .mdTable td {
-          padding: 10px 12px;
-          text-align: left;
-          vertical-align: top;
-          border-bottom: 1px solid #252525;
-        }
-
-        .mdTable th {
-          color: #f2f2f2;
-          background: #181818;
-          font-weight: 700;
-        }
-
-        .mdTable td {
-          color: #cfcfcf;
-        }
-
-        .mdTable tr:last-child td {
-          border-bottom: 0;
-        }
-
-        .messageRowUser .mdParagraph {
-          margin-bottom: 0;
         }
 
         .overlay {
@@ -1811,7 +1723,7 @@ export default function Dashboard() {
           max-width: 94%;
           flex: 1;
           overflow-y: auto;
-          padding-top: 92px;
+          padding-top: 85px;
           padding-bottom: 20px;
           scrollbar-width: none;
           -ms-overflow-style: none;
@@ -1993,13 +1905,14 @@ export default function Dashboard() {
         }
 
         .nativeAttachmentInput {
-          position: fixed;
+          position: absolute;
           width: 1px;
           height: 1px;
           opacity: 0;
-          pointer-events: none;
-          left: -10000px;
-          top: -10000px;
+          overflow: hidden;
+          clip: rect(0 0 0 0);
+          clip-path: inset(50%);
+          white-space: nowrap;
         }
 
         .attachmentPreview {
@@ -2110,6 +2023,175 @@ export default function Dashboard() {
           background: #292929 !important;
         }
 
+        .attachmentMenuItem {
+          width: 100%;
+          height: 40px;
+          padding: 0 10px;
+          border-radius: 9px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          color: #ddd;
+          font-size: 12px;
+          cursor: pointer;
+          user-select: none;
+          -webkit-tap-highlight-color: transparent;
+        }
+
+        .attachmentMenuItem:hover,
+        .attachmentMenuItem:active {
+          background: #292929;
+        }
+
+        .attachmentMenuItem span {
+          width: 20px;
+          text-align: center;
+          flex-shrink: 0;
+        }
+
+        .messageRow {
+          display: flex;
+          width: 100%;
+          margin-bottom: 24px;
+        }
+
+        .messageRowUser {
+          justify-content: flex-end;
+        }
+
+        .messageRowRootx {
+          justify-content: flex-start;
+        }
+
+        .messageColumn {
+          min-width: 0;
+        }
+
+        .messageRowUser .messageColumn {
+          max-width: min(78%, 650px);
+          width: auto;
+        }
+
+        .messageRowRootx .messageColumn {
+          width: 100%;
+          max-width: 100%;
+        }
+
+        .messageBubble {
+          font-size: 15px;
+          line-height: 1.65;
+          overflow-wrap: anywhere;
+        }
+
+        .userBubble {
+          background: #f4f4f4 !important;
+          color: #111 !important;
+          padding: 11px 15px;
+          border-radius: 19px;
+        }
+
+        .userBubble * {
+          color: inherit !important;
+        }
+
+        .rootxBubble {
+          background: transparent !important;
+          color: #e9e9e9 !important;
+          padding: 0;
+        }
+
+        .rootxBubble,
+        .userBubble {
+          min-width: 0;
+          overflow-wrap: anywhere;
+          word-break: normal;
+        }
+
+        .formattedText {
+          width: 100%;
+          min-width: 0;
+        }
+
+        .markdownBlocks {
+          width: 100%;
+        }
+
+        .mdParagraph {
+          margin: 0 0 15px;
+          line-height: 1.72;
+        }
+
+        .mdParagraph:last-child {
+          margin-bottom: 0;
+        }
+
+        .mdHeading {
+          margin: 22px 0 11px;
+          color: #fff;
+          line-height: 1.3;
+          font-weight: 700;
+        }
+
+        h2.mdHeading { font-size: 21px; }
+        h3.mdHeading { font-size: 18px; }
+        h4.mdHeading { font-size: 16px; }
+
+        .mdList {
+          margin: 0 0 16px;
+          padding-left: 25px;
+        }
+
+        .mdList li {
+          margin: 7px 0;
+          padding-left: 4px;
+          line-height: 1.65;
+        }
+
+        .mdTableWrap {
+          width: 100%;
+          overflow-x: auto;
+          margin: 16px 0 20px;
+          border: 1px solid #292929;
+          border-radius: 10px;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .mdTable {
+          width: 100%;
+          min-width: 520px;
+          border-collapse: collapse;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .mdTable th,
+        .mdTable td {
+          padding: 10px 12px;
+          border-bottom: 1px solid #292929;
+          border-right: 1px solid #292929;
+          text-align: left;
+          vertical-align: top;
+        }
+
+        .mdTable th {
+          background: #171717;
+          color: #fff;
+          font-weight: 700;
+        }
+
+        .mdTable td {
+          color: #ddd;
+        }
+
+        .mdTable tr:last-child td {
+          border-bottom: 0;
+        }
+
+        .mdTable th:last-child,
+        .mdTable td:last-child {
+          border-right: 0;
+        }
+
         .messageTools {
           display: flex;
           align-items: center;
@@ -2149,39 +2231,22 @@ export default function Dashboard() {
           }
 
           .logoButton {
-            top: calc(58px + env(safe-area-inset-top));
-            left: 12px;
-            width: 46px;
-            height: 46px;
-          }
-
-          .logoButton img {
-            width: 46px;
-            height: 46px;
+            top: 62px;
+            left: 14px;
+            width: 48px;
+            height: 48px;
           }
 
           .chatHeader {
-            top: calc(52px + env(safe-area-inset-top));
+            top: 56px;
             height: 62px;
-            padding:
-              8px
-              10px
-              8px
-              68px;
-            align-items: center;
-            background:
-              linear-gradient(
-                to bottom,
-                rgba(9,9,9,.99) 0%,
-                rgba(9,9,9,.97) 65%,
-                rgba(9,9,9,0) 100%
-              );
-          }
-
-          .chatHeaderTitle {
-            min-width: 0;
-            flex: 1 1 auto;
-            overflow: hidden;
+            padding: 8px 12px 8px 76px;
+            background: linear-gradient(
+              to bottom,
+              rgba(9,9,9,.99),
+              rgba(9,9,9,.96),
+              rgba(9,9,9,0)
+            );
           }
 
           .chatHeaderText {
@@ -2190,25 +2255,21 @@ export default function Dashboard() {
           }
 
           .chatHeaderText strong {
-            display: block;
-            max-width: 100%;
+            max-width: 43vw;
             font-size: 12px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
           }
 
           .chatHeaderText span {
-            font-size: 8px;
-            white-space: nowrap;
+            max-width: 43vw;
             overflow: hidden;
             text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 8px;
           }
 
           .headerActions {
-            flex: 0 0 auto;
             gap: 5px;
-            margin-left: 6px;
+            margin-left: 5px;
           }
 
           .founderButton {
@@ -2224,23 +2285,10 @@ export default function Dashboard() {
             height: 17px;
           }
 
-          .founderButtonText {
-            display: inline;
-          }
-
           .headerDots,
           .headerPin {
             width: 38px;
             height: 38px;
-          }
-
-          .headerDots {
-            font-size: 20px;
-          }
-
-          .topChatMenu {
-            top: 45px;
-            right: 0;
           }
 
           .sidebar {
@@ -2251,75 +2299,17 @@ export default function Dashboard() {
           .messages {
             width: 100%;
             max-width: none;
-            padding:
-              calc(128px + env(safe-area-inset-top))
-              18px
-              18px;
-          }
-
-          .messageRow {
-            margin-bottom: 24px;
-          }
-
-          .userMessageWrap {
-            max-width: 88%;
-          }
-
-          .userBubble,
-          .rootxBubble {
-            font-size: 15px;
-          }
-
-          .rootxBubble {
-            line-height: 1.7;
-            overflow-wrap: anywhere;
-            word-break: normal;
-          }
-
-          .mdParagraph {
-            margin-bottom: 16px;
-            line-height: 1.7;
-          }
-
-          .mdHeading {
-            margin-top: 21px;
-            font-size: 19px;
-          }
-
-          h3.mdHeading {
-            font-size: 16px;
-          }
-
-          .mdList {
-            padding-left: 22px;
-            margin-bottom: 15px;
-          }
-
-          .mdTable {
-            font-size: 12px;
-            min-width: 420px;
-          }
-
-          .mdTableWrap {
-            max-width: 100%;
-            -webkit-overflow-scrolling: touch;
-          }
-
-          .mdTable th,
-          .mdTable td {
-            padding: 9px 10px;
+            padding: 128px 17px 18px;
           }
 
           .inputArea {
             width: 100%;
             max-width: none;
-            padding:
-              8px
-              14px
-              calc(12px + env(safe-area-inset-bottom));
+            padding: 8px 12px calc(12px + env(safe-area-inset-bottom));
           }
 
           .inputBox {
+            width: 100%;
             gap: 6px;
             padding: 7px;
             border-radius: 17px;
@@ -2327,9 +2317,10 @@ export default function Dashboard() {
 
           .inputBox textarea {
             min-width: 0;
+            flex: 1 1 auto;
             font-size: 15px;
             line-height: 1.4;
-            padding: 14px 7px;
+            padding: 14px 5px;
             white-space: pre-wrap;
             overflow-x: hidden;
           }
@@ -2338,27 +2329,16 @@ export default function Dashboard() {
             padding: 0 11px;
           }
 
-          .inputBox > button:last-child {
-            min-width: 58px;
-          }
-
-          .inputBox textarea {
-            min-width: 0;
-            flex: 1 1 auto;
-          }
-
           .plusButton,
           .voiceButton {
             width: 46px !important;
             min-width: 46px;
-          }
-
-          .plusButton {
-            font-size: 23px !important;
-          }
-
-          .voiceButton {
             height: 46px !important;
+          }
+
+          .inputBox > button:last-child {
+            min-width: 58px;
+            padding: 0 11px;
           }
 
           .attachmentMenu {
@@ -2366,8 +2346,8 @@ export default function Dashboard() {
             width: 190px;
           }
 
-          .attachmentMenu button {
-            height: 44px !important;
+          .attachmentMenuItem {
+            height: 44px;
           }
 
           .attachmentPreview {
@@ -2378,6 +2358,46 @@ export default function Dashboard() {
             padding: 0 5px;
             font-size: 10px;
             line-height: 1.45;
+          }
+
+          .messageRow {
+            margin-bottom: 22px;
+          }
+
+          .messageRowUser .messageColumn {
+            max-width: 84%;
+          }
+
+          .messageBubble {
+            font-size: 15px;
+            line-height: 1.62;
+          }
+
+          .rootxBubble {
+            overflow-wrap: anywhere;
+            word-break: normal;
+          }
+
+          .mdParagraph {
+            margin-bottom: 15px;
+            line-height: 1.72;
+          }
+
+          .mdHeading {
+            margin-top: 20px;
+          }
+
+          .mdList {
+            padding-left: 23px;
+          }
+
+          .mdTable {
+            min-width: 500px;
+            font-size: 12px;
+          }
+
+          .messageTools {
+            margin-top: 12px;
           }
         }
 
@@ -2456,9 +2476,9 @@ function MessageBubble({
   const user = message.role === "user";
 
   return (
-    <div className={`messageRow ${user ? "messageRowUser" : "messageRowRootX"}`}>
-      <div className={user ? "userMessageWrap" : "rootxMessageWrap"}>
-        <div className={user ? "userBubble" : "rootxBubble"}>
+    <div className={`messageRow ${user ? "messageRowUser" : "messageRowRootx"}`}>
+      <div className="messageColumn">
+        <div className={`messageBubble ${user ? "userBubble" : "rootxBubble"}`}>
           <FormattedText text={message.text} />
 
           {!user && (
@@ -2493,13 +2513,12 @@ function FormattedText({
       {parts.map((part, index) => {
         if (part.startsWith("```")) {
           const content = part.slice(3, -3);
-          const lines = content.split("\n");
-
+          const lines = content.replace(/\r/g, "").split("\n");
           let language = "";
           let code = content;
 
           if (
-            lines.length > 0 &&
+            lines.length > 1 &&
             /^[a-zA-Z0-9_+#.-]+$/.test(lines[0].trim())
           ) {
             language = lines[0].trim();
@@ -2507,20 +2526,11 @@ function FormattedText({
           }
 
           return (
-            <CodeBlock
-              key={index}
-              code={code}
-              language={language}
-            />
+            <CodeBlock key={index} code={code} language={language} />
           );
         }
 
-        return (
-          <MarkdownBlocks
-            key={index}
-            text={part}
-          />
-        );
+        return <MarkdownBlocks key={index} text={part} />;
       })}
     </div>
   );
@@ -2534,39 +2544,43 @@ function MarkdownBlocks({ text }: { text: string }) {
     level?: number;
   }> = [];
 
-  let currentParagraph: string[] = [];
-  let currentList: string[] = [];
-  let currentListType: "ul" | "ol" | null = null;
-  let currentTable: string[] = [];
+  let paragraph: string[] = [];
+  let list: string[] = [];
+  let listType: "ul" | "ol" | null = null;
+  let table: string[] = [];
 
   const flushParagraph = () => {
-    if (currentParagraph.length) {
-      blocks.push({ type: "paragraph", lines: currentParagraph });
-      currentParagraph = [];
+    if (paragraph.length) {
+      blocks.push({ type: "paragraph", lines: paragraph });
+      paragraph = [];
     }
   };
 
   const flushList = () => {
-    if (currentList.length && currentListType) {
-      blocks.push({
-        type: currentListType,
-        lines: currentList,
-      });
+    if (list.length && listType) {
+      blocks.push({ type: listType, lines: list });
     }
-    currentList = [];
-    currentListType = null;
+    list = [];
+    listType = null;
   };
 
   const flushTable = () => {
-    if (currentTable.length) {
-      blocks.push({ type: "table", lines: currentTable });
-      currentTable = [];
+    if (table.length) {
+      blocks.push({ type: "table", lines: table });
+      table = [];
     }
   };
 
-  for (const rawLine of lines) {
-    const line = rawLine.trimEnd();
-    const trimmed = line.trim();
+  const isTableLine = (value: string) => {
+    const cells = value.trim().replace(/^\|/, "").replace(/\|$/, "").split("|");
+    return cells.length >= 2;
+  };
+
+  const isSeparator = (value: string) =>
+    /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$/.test(value.trim());
+
+  for (const raw of lines) {
+    const trimmed = raw.trim();
 
     if (!trimmed) {
       flushParagraph();
@@ -2575,62 +2589,49 @@ function MarkdownBlocks({ text }: { text: string }) {
       continue;
     }
 
-    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
-    if (headingMatch) {
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
       flushParagraph();
       flushList();
       flushTable();
       blocks.push({
         type: "heading",
-        lines: [headingMatch[2]],
-        level: headingMatch[1].length,
+        lines: [heading[2]],
+        level: Math.min(heading[1].length, 4),
       });
       continue;
     }
 
-    if (trimmed.includes("|")) {
-      const isSeparator =
-        /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?$/.test(trimmed);
-
-      if (isSeparator) {
-        // Markdown table separator line; don't render it.
-        continue;
-      }
-
+    if (trimmed.includes("|") && (isTableLine(trimmed) || isSeparator(trimmed))) {
       flushParagraph();
       flushList();
-      currentTable.push(trimmed);
+      if (!isSeparator(trimmed)) table.push(trimmed);
       continue;
     }
 
-    if (currentTable.length) {
-      flushTable();
-    }
+    if (table.length) flushTable();
 
     const unordered = trimmed.match(/^[-*•]\s+(.+)$/);
     const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
 
     if (unordered) {
       flushParagraph();
-      if (currentListType !== "ul") flushList();
-      currentListType = "ul";
-      currentList.push(unordered[1]);
+      if (listType !== "ul") flushList();
+      listType = "ul";
+      list.push(unordered[1]);
       continue;
     }
 
     if (ordered) {
       flushParagraph();
-      if (currentListType !== "ol") flushList();
-      currentListType = "ol";
-      currentList.push(ordered[1]);
+      if (listType !== "ol") flushList();
+      listType = "ol";
+      list.push(ordered[1]);
       continue;
     }
 
-    if (currentList.length) {
-      flushList();
-    }
-
-    currentParagraph.push(trimmed);
+    if (list.length) flushList();
+    paragraph.push(trimmed);
   }
 
   flushParagraph();
@@ -2641,13 +2642,7 @@ function MarkdownBlocks({ text }: { text: string }) {
     <div className="markdownBlocks">
       {blocks.map((block, index) => {
         if (block.type === "heading") {
-          const Tag =
-            block.level === 1
-              ? "h2"
-              : block.level === 2
-              ? "h3"
-              : "h4";
-
+          const Tag = block.level === 1 ? "h2" : block.level === 2 ? "h3" : "h4";
           return (
             <Tag className="mdHeading" key={index}>
               {formatInline(block.lines[0])}
@@ -2656,28 +2651,51 @@ function MarkdownBlocks({ text }: { text: string }) {
         }
 
         if (block.type === "ul" || block.type === "ol") {
-          const Tag = block.type;
+          const Tag = block.type === "ul" ? "ul" : "ol";
           return (
             <Tag className="mdList" key={index}>
-              {block.lines.map((item, itemIndex) => (
-                <li key={itemIndex}>{formatInline(item)}</li>
+              {block.lines.map((line, itemIndex) => (
+                <li key={itemIndex}>{formatInline(line)}</li>
               ))}
             </Tag>
           );
         }
 
         if (block.type === "table") {
-          return <MarkdownTable key={index} lines={block.lines} />;
+          const rows = block.lines.map((line) =>
+            line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim())
+          );
+
+          const header = rows[0] || [];
+          const body = rows.slice(1);
+
+          return (
+            <div className="mdTableWrap" key={index}>
+              <table className="mdTable">
+                <thead>
+                  <tr>
+                    {header.map((cell, cellIndex) => (
+                      <th key={cellIndex}>{formatInline(cell)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {body.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {header.map((_, cellIndex) => (
+                        <td key={cellIndex}>{formatInline(row[cellIndex] || "")}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
         }
 
         return (
           <p className="mdParagraph" key={index}>
-            {block.lines.map((line, lineIndex) => (
-              <span key={lineIndex}>
-                {lineIndex > 0 && <br />}
-                {formatInline(line)}
-              </span>
-            ))}
+            {formatInline(block.lines.join(" "))}
           </p>
         );
       })}
@@ -2685,103 +2703,34 @@ function MarkdownBlocks({ text }: { text: string }) {
   );
 }
 
-function MarkdownTable({ lines }: { lines: string[] }) {
-  const rows = lines
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^\|/, "")
-        .replace(/\|$/, "")
-        .split("|")
-        .map((cell) => cell.trim())
-    )
-    .filter((row) => row.some(Boolean));
+function formatInline(text: string) {
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
 
-  if (!rows.length) return null;
-
-  const header = rows[0];
-  const body = rows.slice(1);
-
-  return (
-    <div className="mdTableWrap">
-      <table className="mdTable">
-        <thead>
-          <tr>
-            {header.map((cell, index) => (
-              <th key={index}>{formatInline(cell)}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {body.map((row, rowIndex) => (
-            <tr key={rowIndex}>
-              {header.map((_, cellIndex) => (
-                <td key={cellIndex}>
-                  {formatInline(row[cellIndex] || "")}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/* INLINE FORMAT */
-
-function formatInline(
-  text: string
-) {
-  const parts =
-    text.split(
-      /(`[^`]+`|\*\*[^*]+\*\*)/g
-    );
-
-  return parts.map(
-    (part, index) => {
-
-      if (
-        part.startsWith("`") &&
-        part.endsWith("`")
-      ) {
-        return (
-          <code
-            key={index}
-            style={{
-              padding: "2px 5px",
-              borderRadius: 5,
-              background: "#222",
-              border:
-                "1px solid #333",
-              fontFamily:
-                "monospace",
-              fontSize: "0.9em",
-            }}
-          >
-            {part.slice(1, -1)}
-          </code>
-        );
-      }
-
-      if (
-        part.startsWith("**") &&
-        part.endsWith("**")
-      ) {
-        return (
-          <strong key={index}>
-            {part.slice(2, -2)}
-          </strong>
-        );
-      }
-
+  return parts.map((part, index) => {
+    if (part.startsWith("`") && part.endsWith("`")) {
       return (
-        <span key={index}>
-          {part}
-        </span>
+        <code
+          key={index}
+          style={{
+            padding: "2px 5px",
+            borderRadius: 5,
+            background: "#222",
+            border: "1px solid #333",
+            fontFamily: "monospace",
+            fontSize: "0.9em",
+          }}
+        >
+          {part.slice(1, -1)}
+        </code>
       );
     }
-  );
+
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    }
+
+    return <span key={index}>{part}</span>;
+  });
 }
 
 /* CODE BLOCK */
