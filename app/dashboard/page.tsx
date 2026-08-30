@@ -47,6 +47,12 @@ export default function Dashboard() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
 
+  // Keep native file inputs mounted so mobile browsers reliably open
+  // Photos, Camera and Files from a real user tap.
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   /* LOAD LOGGED-IN USER */
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -351,48 +357,54 @@ export default function Dashboard() {
   };
 
   /* ATTACHMENTS */
-  const chooseAttachment = (
-    accept: string,
-    useCamera = false
-  ) => {
-    setShowAttachmentMenu(false);
 
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = accept;
-    input.setAttribute("aria-label", useCamera ? "Take a photo" : "Choose a file");
+  const handleAttachment = (file: File | null) => {
+    if (!file) return;
 
-    // On phones this tells the browser to open the camera directly.
-    // On desktop it simply behaves like a normal file picker.
-    if (useCamera) {
-      input.setAttribute("capture", "environment");
+    if (attachmentPreview) {
+      URL.revokeObjectURL(attachmentPreview);
     }
 
-    input.onchange = () => {
-      const file = input.files?.[0];
-      if (!file) return;
+    setAttachment(file);
+    setAttachmentPreview(
+      file.type.startsWith("image/")
+        ? URL.createObjectURL(file)
+        : null
+    );
+    setShowAttachmentMenu(false);
+  };
 
-      setAttachment(file);
-      setAttachmentPreview(
-        file.type.startsWith("image/")
-          ? URL.createObjectURL(file)
-          : null
-      );
-    };
+  const openAttachmentPicker = (kind: "photos" | "camera" | "files") => {
+    setShowAttachmentMenu(false);
 
-    // Keep the input in the DOM long enough for mobile browsers to open it.
-    document.body.appendChild(input);
-    input.click();
-    window.setTimeout(() => {
-      input.remove();
-    }, 1000);
+    // Calling click() directly from the button event keeps the action
+    // trusted on Android/iOS browsers.
+    if (kind === "photos") {
+      photoInputRef.current?.click();
+    } else if (kind === "camera") {
+      cameraInputRef.current?.click();
+    } else {
+      fileInputRef.current?.click();
+    }
   };
 
   const removeAttachment = () => {
     if (attachmentPreview) URL.revokeObjectURL(attachmentPreview);
     setAttachment(null);
     setAttachmentPreview(null);
+
+    // Reset the native inputs so selecting the same file again still
+    // triggers an onChange event.
+    if (photoInputRef.current) photoInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
+
+  useEffect(() => {
+    return () => {
+      if (attachmentPreview) URL.revokeObjectURL(attachmentPreview);
+    };
+  }, [attachmentPreview]);
 
   /* SEND MESSAGE */
 
@@ -436,6 +448,21 @@ export default function Dashboard() {
     setLoading(true);
 
     try {
+      let attachmentData: string | null = null;
+
+      // Send the actual image to the API when it is reasonably small.
+      // This makes photo/camera attachments real attachments rather than
+      // only sending the filename. Larger files still appear correctly
+      // in the chat and are sent as metadata.
+      if (sentAttachment && sentAttachment.type.startsWith("image/") && sentAttachment.size <= 6 * 1024 * 1024) {
+        attachmentData = await new Promise<string | null>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(sentAttachment);
+        });
+      }
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -448,6 +475,7 @@ export default function Dashboard() {
                 name: sentAttachment.name,
                 type: sentAttachment.type,
                 size: sentAttachment.size,
+                dataUrl: attachmentData,
               }
             : null,
         }),
@@ -980,6 +1008,36 @@ export default function Dashboard() {
 
         {/* INPUT */}
 
+        {/* Native inputs stay mounted for reliable mobile attachment actions. */}
+        <input
+          ref={photoInputRef}
+          className="nativeAttachmentInput"
+          type="file"
+          accept="image/*"
+          onChange={(e) => handleAttachment(e.target.files?.[0] || null)}
+          tabIndex={-1}
+          aria-hidden="true"
+        />
+        <input
+          ref={cameraInputRef}
+          className="nativeAttachmentInput"
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={(e) => handleAttachment(e.target.files?.[0] || null)}
+          tabIndex={-1}
+          aria-hidden="true"
+        />
+        <input
+          ref={fileInputRef}
+          className="nativeAttachmentInput"
+          type="file"
+          accept="*/*"
+          onChange={(e) => handleAttachment(e.target.files?.[0] || null)}
+          tabIndex={-1}
+          aria-hidden="true"
+        />
+
         <div className="inputArea">
 
           {attachment && (
@@ -1012,14 +1070,14 @@ export default function Dashboard() {
               </button>
 
               {showAttachmentMenu && (
-                <div className="attachmentMenu">
-                  <button type="button" onClick={() => chooseAttachment("image/*")}>
+                <div className="attachmentMenu" role="menu">
+                  <button type="button" role="menuitem" onClick={() => openAttachmentPicker("photos")}>
                     <span>▣</span> Photos
                   </button>
-                  <button type="button" onClick={() => chooseAttachment("image/*", true)}>
+                  <button type="button" role="menuitem" onClick={() => openAttachmentPicker("camera")}>
                     <span>◉</span> Camera
                   </button>
-                  <button type="button" onClick={() => chooseAttachment("*/*")}>
+                  <button type="button" role="menuitem" onClick={() => openAttachmentPicker("files")}>
                     <span>📎</span> Files
                   </button>
                 </div>
@@ -1170,6 +1228,8 @@ export default function Dashboard() {
         .mdParagraph {
           margin: 0 0 16px;
           line-height: 1.75;
+          overflow-wrap: break-word;
+          word-break: normal;
         }
 
         .mdParagraph:last-child {
@@ -1932,6 +1992,16 @@ export default function Dashboard() {
           cursor: default !important;
         }
 
+        .nativeAttachmentInput {
+          position: fixed;
+          width: 1px;
+          height: 1px;
+          opacity: 0;
+          pointer-events: none;
+          left: -10000px;
+          top: -10000px;
+        }
+
         .attachmentPreview {
           display: flex;
           align-items: center;
@@ -2079,7 +2149,7 @@ export default function Dashboard() {
           }
 
           .logoButton {
-            top: calc(30px + env(safe-area-inset-top));
+            top: calc(58px + env(safe-area-inset-top));
             left: 12px;
             width: 46px;
             height: 46px;
@@ -2091,8 +2161,8 @@ export default function Dashboard() {
           }
 
           .chatHeader {
-            top: calc(24px + env(safe-area-inset-top));
-            height: 68px;
+            top: calc(52px + env(safe-area-inset-top));
+            height: 62px;
             padding:
               8px
               10px
@@ -2182,7 +2252,7 @@ export default function Dashboard() {
             width: 100%;
             max-width: none;
             padding:
-              calc(112px + env(safe-area-inset-top))
+              calc(128px + env(safe-area-inset-top))
               18px
               18px;
           }
@@ -2260,12 +2330,21 @@ export default function Dashboard() {
             font-size: 15px;
             line-height: 1.4;
             padding: 14px 7px;
-            white-space: nowrap;
+            white-space: pre-wrap;
             overflow-x: hidden;
           }
 
           .inputBox button {
-            padding: 0 13px;
+            padding: 0 11px;
+          }
+
+          .inputBox > button:last-child {
+            min-width: 58px;
+          }
+
+          .inputBox textarea {
+            min-width: 0;
+            flex: 1 1 auto;
           }
 
           .plusButton,
@@ -2407,7 +2486,7 @@ function FormattedText({
 }: {
   text: string;
 }) {
-  const parts = text.split(/(```[\s\\S]*?```)/g);
+  const parts = text.split(/(```[\s\S]*?```)/g);
 
   return (
     <div className="formattedText">
@@ -2529,7 +2608,7 @@ function MarkdownBlocks({ text }: { text: string }) {
     }
 
     const unordered = trimmed.match(/^[-*•]\s+(.+)$/);
-    const ordered = trimmed.match(/^\\d+[.)]\s+(.+)$/);
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
 
     if (unordered) {
       flushParagraph();
