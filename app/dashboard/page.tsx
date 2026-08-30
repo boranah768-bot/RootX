@@ -1152,8 +1152,10 @@ export default function Dashboard() {
           width: 100%;
           color: #e7e7e7;
           font-size: 15px;
-          line-height: 1.75;
+          line-height: 1.72;
           overflow-wrap: anywhere;
+          word-break: normal;
+          white-space: normal;
         }
 
         .formattedText {
@@ -2077,7 +2079,7 @@ export default function Dashboard() {
           }
 
           .logoButton {
-            top: calc(10px + env(safe-area-inset-top));
+            top: calc(30px + env(safe-area-inset-top));
             left: 12px;
             width: 46px;
             height: 46px;
@@ -2089,10 +2091,10 @@ export default function Dashboard() {
           }
 
           .chatHeader {
-            top: 0;
-            height: calc(76px + env(safe-area-inset-top));
+            top: calc(24px + env(safe-area-inset-top));
+            height: 68px;
             padding:
-              calc(10px + env(safe-area-inset-top))
+              8px
               10px
               8px
               68px;
@@ -2180,7 +2182,7 @@ export default function Dashboard() {
             width: 100%;
             max-width: none;
             padding:
-              calc(96px + env(safe-area-inset-top))
+              calc(112px + env(safe-area-inset-top))
               18px
               18px;
           }
@@ -2199,11 +2201,14 @@ export default function Dashboard() {
           }
 
           .rootxBubble {
-            line-height: 1.72;
+            line-height: 1.7;
+            overflow-wrap: anywhere;
+            word-break: normal;
           }
 
           .mdParagraph {
-            margin-bottom: 15px;
+            margin-bottom: 16px;
+            line-height: 1.7;
           }
 
           .mdHeading {
@@ -2222,7 +2227,12 @@ export default function Dashboard() {
 
           .mdTable {
             font-size: 12px;
-            min-width: 390px;
+            min-width: 420px;
+          }
+
+          .mdTableWrap {
+            max-width: 100%;
+            -webkit-overflow-scrolling: touch;
           }
 
           .mdTable th,
@@ -2397,14 +2407,14 @@ function FormattedText({
 }: {
   text: string;
 }) {
-  const parts = text.split(/(```[\\s\\S]*?```)/g);
+  const parts = text.split(/(```[\s\\S]*?```)/g);
 
   return (
     <div className="formattedText">
       {parts.map((part, index) => {
         if (part.startsWith("```")) {
           const content = part.slice(3, -3);
-          const lines = content.split("\\n");
+          const lines = content.split("\n");
 
           let language = "";
           let code = content;
@@ -2414,7 +2424,7 @@ function FormattedText({
             /^[a-zA-Z0-9_+#.-]+$/.test(lines[0].trim())
           ) {
             language = lines[0].trim();
-            code = lines.slice(1).join("\\n");
+            code = lines.slice(1).join("\n");
           }
 
           return (
@@ -2438,7 +2448,7 @@ function FormattedText({
 }
 
 function MarkdownBlocks({ text }: { text: string }) {
-  const lines = text.replace(/\\r/g, "").split("\\n");
+  const lines = text.replace(/\r/g, "").split("\n");
   const blocks: Array<{
     type: "paragraph" | "ul" | "ol" | "table" | "heading";
     lines: string[];
@@ -2486,7 +2496,7 @@ function MarkdownBlocks({ text }: { text: string }) {
       continue;
     }
 
-    const headingMatch = trimmed.match(/^(#{1,6})\\s+(.+)$/);
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
       flushParagraph();
       flushList();
@@ -2501,7 +2511,7 @@ function MarkdownBlocks({ text }: { text: string }) {
 
     if (trimmed.includes("|")) {
       const isSeparator =
-        /^\\|?\\s*:?-+:?\\s*(\\|\\s*:?-+:?\\s*)+\\|?$/.test(trimmed);
+        /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?$/.test(trimmed);
 
       if (isSeparator) {
         // Markdown table separator line; don't render it.
@@ -2518,8 +2528,8 @@ function MarkdownBlocks({ text }: { text: string }) {
       flushTable();
     }
 
-    const unordered = trimmed.match(/^[-*•]\\s+(.+)$/);
-    const ordered = trimmed.match(/^\\d+[.)]\\s+(.+)$/);
+    const unordered = trimmed.match(/^[-*•]\s+(.+)$/);
+    const ordered = trimmed.match(/^\\d+[.)]\s+(.+)$/);
 
     if (unordered) {
       flushParagraph();
@@ -2601,8 +2611,8 @@ function MarkdownTable({ lines }: { lines: string[] }) {
     .map((line) =>
       line
         .trim()
-        .replace(/^\\|/, "")
-        .replace(/\\|$/, "")
+        .replace(/^\|/, "")
+        .replace(/\|$/, "")
         .split("|")
         .map((cell) => cell.trim())
     )
