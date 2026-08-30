@@ -1373,7 +1373,7 @@ export default function Dashboard() {
         .chatHeaderTitle {
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 20px;
           min-width: 0;
         }
 
@@ -1912,7 +1912,12 @@ export default function Dashboard() {
         }
 
         @media (max-width: 600px) {
+          .logoButton {
+            top: 40px;
+          }
+
           .chatHeader {
+            top: 28px;
             padding-left: 76px;
             padding-right: 14px;
           }
@@ -1950,7 +1955,7 @@ export default function Dashboard() {
 
           .messages {
             max-width: 92%;
-            padding-top: 78px;
+            padding-top: 106px;
           }
 
           .inputArea {
